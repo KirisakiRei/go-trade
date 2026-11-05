@@ -25,9 +25,6 @@ func NewMatchTraderBroker(token string) *MatchTraderBroker {
 	if token == "" {
 		token = os.Getenv("MATCHTRADER_TOKEN")
 	}
-	if token == "" {
-		token = "eyJhbGciOiJIUzI1NiJ9.eyJ0b2tlblV1aWQiOiJkOTdjYjk0OC02YjFhLTQ1MzQtYTA5ZC00NzRjYjgwZTBmNWQiLCJlbnZpcm9ubWVudCI6Im10cnByb3AiLCJ0cmFkaW5nQWNjb3VudExvZ2luIjoxMDg5NjMyLCJleHAiOjE4MjU0NTkxOTksImlhdCI6MTc5MzkwMDQ2OSwianRpIjoiYWM2YTdmNmItMTU1OC00MWQ5LThkYWQtNzBkOWU5YTg1MTAwIn0.fL9vIE3ZrxVocFJCMa83hH0XqeJznnThonOmaxaUNVs"
-	}
 	return &MatchTraderBroker{
 		token:   token,
 		baseURL: "https://trader-api.match-trader.com/v1",

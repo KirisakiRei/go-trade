@@ -50,28 +50,16 @@ func NewCTraderBroker(cfg CTraderConfig) (*CTraderBroker, error) {
 	if cfg.ClientID == "" {
 		cfg.ClientID = os.Getenv("CTRADER_CLIENT_ID")
 	}
-	if cfg.ClientID == "" {
-		cfg.ClientID = "46457_XmetWigSeyowtqWBefGG4V2j6iZC2VjOXJbtNxcxDtGqF0mnIS"
-	}
 	if cfg.ClientSecret == "" {
 		cfg.ClientSecret = os.Getenv("CTRADER_CLIENT_SECRET")
-	}
-	if cfg.ClientSecret == "" {
-		cfg.ClientSecret = "X37OYjoVcXYpvdCxUKYHrbqWX6CY2srlciJv3tDSt5mHFgORJg"
 	}
 	if cfg.AccountID == 0 {
 		if envAcc := os.Getenv("CTRADER_ACCOUNT_ID"); envAcc != "" {
 			cfg.AccountID, _ = strconv.ParseInt(envAcc, 10, 64)
 		}
 	}
-	if cfg.AccountID == 0 {
-		cfg.AccountID = 49366554
-	}
 	if cfg.AccessToken == "" {
 		cfg.AccessToken = os.Getenv("CTRADER_ACCESS_TOKEN")
-	}
-	if cfg.AccessToken == "" {
-		cfg.AccessToken = "_bXyorvkJxJb_4jgTZhqHrGvqwlVgJflKQRCEBp1A7k"
 	}
 
 	b := &CTraderBroker{
