@@ -10,12 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"ila-engine/internal/config"
 	"ila-engine/internal/model"
 	"ila-engine/internal/router"
 )
 
 func main() {
+	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	// 1. Structured JSON Logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

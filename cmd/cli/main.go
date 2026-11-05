@@ -16,9 +16,12 @@ import (
 	"ila-engine/internal/service"
 	"ila-engine/pkg/broker"
 	"ila-engine/pkg/marketfeed"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	symbol := flag.String("symbol", "XAUUSD", "Market symbol to analyze")
 	limit := flag.Int("limit", 100, "Number of candles to evaluate")
 	format := flag.String("format", "text", "Output format: text or json")

@@ -18,6 +18,7 @@ import (
 	"ila-engine/pkg/marketfeed"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -401,6 +402,7 @@ func makeILATable(pairs []ILARowDisplay) string {
 }
 
 func main() {
+	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
 
 	// 1. Connect SQLite
@@ -723,13 +725,12 @@ func main() {
 					tp := setup.TakeProfit
 
 					riskPercent := 1.00 // Strictly dynamic 1% live equity risk
-					acc, _ := tradeBroker.GetAccountInfo(ctx)
-					equity := acc.Equity
-					if equity <= 0 {
+					equity := 10000.0 // Default fallback equity
+					acc, err := tradeBroker.GetAccountInfo(ctx)
+					if err == nil && acc != nil && acc.Equity > 0 {
+						equity = acc.Equity
+					} else if acc != nil && acc.Balance > 0 {
 						equity = acc.Balance
-					}
-					if equity <= 0 {
-						equity = 10000.0 // Match-Trader Demo $10k default
 					}
 					riskDollars := equity * (riskPercent / 100.0)
 					lot := calcLot(sym, entryPrice, sl, riskDollars)
