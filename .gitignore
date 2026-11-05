@@ -1,0 +1,21 @@
+# Local environment config (Do NOT commit to Git)
+.env
+*.env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Binaries & build artifacts
+bin/
+*.exe
+*.test
+*.out
+server.log
+monitor_state.json
+
+# IDE & OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
