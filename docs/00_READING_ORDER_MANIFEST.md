@@ -6,6 +6,10 @@
 
 ---
 
+> 🔴 **WAJIB DIBACA PERTAMA KALI SETIAP PULL:** [`AGENT_LOG.md`](./AGENT_LOG.md) — kanal komunikasi 2 arah (Human ⇄ Hermes). Berisi perubahan terbaru, tugas yang diminta, dan balasan Hermes. Cara pakainya ada di dalam file tersebut.
+
+---
+
 ## 🗺️ Urutan Pembacaan Wajib:
 
 ```text
@@ -33,6 +37,11 @@
 ---
 
 ## 📌 Ringkasan Cepat Tiap Dokumen:
+
+### 📖 `AGENT_LOG.md` (Baca paling awal setiap pull!)
+* Kanal komunikasi 2 arah Human ⇄ Hermes lewat repo.
+* Berisi: perubahan terbaru, tugas dari human, balasan Hermes, changelog ringkas, dan daftar temuan terbuka.
+* Hermes **wajib** menambah balasan di bagian **⬆️ DARI HERMES** bila diminta.
 
 ### 📖 `01_ARCHITECTURE_AND_SYSTEM_DESIGN.md`
 * Menjelaskan struktur folder Go (`cmd/`, `internal/`, `pkg/`).
