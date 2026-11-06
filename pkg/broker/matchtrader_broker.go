@@ -244,6 +244,53 @@ func (b *MatchTraderBroker) GetOpenPositions(ctx context.Context) ([]PositionInf
 	return list, nil
 }
 
+type MatchTraderClosedPosition struct {
+	ID          string  `json:"id"`
+	Symbol      string  `json:"symbol"`
+	Side        string  `json:"side"`
+	Volume      float64 `json:"volume"`
+	OpenPrice   float64 `json:"openPrice"`
+	ClosePrice  float64 `json:"closePrice"`
+	Profit      float64 `json:"profit"`
+	CloseReason string  `json:"closeReason"`
+	OpenTime    int64   `json:"openTime"`
+	CloseTime   int64   `json:"closeTime"`
+}
+
+func (b *MatchTraderBroker) GetClosedPositions(ctx context.Context, fromTime, toTime time.Time) ([]MatchTraderClosedPosition, error) {
+	nowMs := toTime.UnixMilli()
+	fromMs := fromTime.UnixMilli()
+	if fromMs <= 0 {
+		fromMs = nowMs - (7 * 24 * 3600 * 1000)
+	}
+	url := fmt.Sprintf("%s/closed-positions?from=%d&to=%d", b.baseURL, fromMs, nowMs)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Match-Trader closed positions error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var res struct {
+		ClosedPositions []MatchTraderClosedPosition `json:"closedPositions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res.ClosedPositions, nil
+}
+
 // Ensure interface compatibility
 var _ Broker = (*MatchTraderBroker)(nil)
 var _ = strconv.Itoa

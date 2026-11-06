@@ -506,13 +506,29 @@ func main() {
 			// Posisi sudah resmi tertutup di server broker! Tarik deal detailnya
 			exitPrice := pos.OpenPrice
 			actualPnL := 0.0
+			isDealFound := false
 
+			// 1. Tarik deal penutup dari cTrader
 			if cTraderBroker != nil && cPosID > 0 {
 				deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
 				for _, d := range deals {
 					if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
 						exitPrice = d.ExecutionPrice
 						actualPnL = d.GrossProfit
+						isDealFound = true
+						break
+					}
+				}
+			}
+
+			// 2. Tarik closed position dari Match-Trader jika deal cTrader kosong
+			if !isDealFound && mtrBroker != nil && mtrID != "" {
+				closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-24*time.Hour), time.Now())
+				for _, cp := range closedMtr {
+					if cp.ID == mtrID {
+						exitPrice = cp.ClosePrice
+						actualPnL = cp.Profit
+						isDealFound = true
 						break
 					}
 				}
