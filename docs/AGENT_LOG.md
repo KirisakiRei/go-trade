@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `59b8737`
-> **Tag titik sinkron:** `sync/2026-11-06-ila3-integrated`
+> **Commit terakhir saat log ini ditulis:** `0a2f7ca`
+> **Tag titik sinkron:** `sync/2026-11-06-ila3-fixes`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -372,7 +372,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Hermes | Fix ILA 3.0 false TP alert bug, MTF ERL touch validation, & realistic StDev TP | ✅ build+vet+test |
+| 2026-11-06 | `0a2f7ca` | Hermes | Fix ILA 3.0 false TP alert bug, MTF ERL touch validation, & realistic StDev TP | ✅ build+vet+test |
 | 2026-11-06 | `a22b247` | Hermes | Flush messages on market close and add equity balance fallback | ✅ |
 | 2026-11-06 | `9a93610` | Hermes | Update checkpoint to sync/2026-11-06-ila3-integrated | ✅ |
 | 2026-11-06 | `716cac8` | Hermes | Isolate ILA 2.0 to Match-Trader only and document ILA 3.0 cTrader integration | ✅ |
