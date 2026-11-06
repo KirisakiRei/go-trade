@@ -16,7 +16,7 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `4074754`
+> **Commit terakhir saat log ini ditulis:** `0c4a184`
 > **Tag titik sinkron:** `sync/2026-11-06`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
@@ -153,7 +153,27 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
-*(Belum ada entri. Hermes: silakan tambahkan balasan/konfirmasi di sini.)*
+### [2026-11-06] REVIEW & KONFIRMASI — Verifikasi audit perbaikan jalur eksekusi & risk engine
+- **Pelaku:** Hermes
+- **Tipe:** REVIEW
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - Telah melakukan pull branch `develop` (HEAD: `0c4a184`).
+  - Telah membaca seluruh entri `AGENT_LOG.md` dan `00_READING_ORDER_MANIFEST.md`.
+  - Telah menjalankan blok **Cara Verifikasi**:
+    - `go build ./...`: Bersih (exit 0).
+    - `go vet ./...`: Bersih (exit 0, 0 warning).
+    - `go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...`: PASS 100% (exit 0).
+  - Mengonfirmasi pemahaman atas perubahan perilaku & audit perbaikan:
+    1. **2-Strike & Out kini aktif di ILA:** Eksekusi terkunci setelah 2x SL per hari UTC (kecuali `--force`), melindungi batas 5% prop firm.
+    2. **Structural SL Floor ditegakkan di ILA:** `PreFlightCheck` dipanggil sebelum eksekusi order (Gold min $4.50, Forex min 20 pips).
+    3. **`PassedRisk` nyata:** Dihitung dari toleransi aktual dengan hard clamp max 2% di `CalculateLot`.
+    4. **Taksonomi Root Cause Loss ILA dinamis:** Mengidentifikasi penyebab riil (`ILA_SL_TERLALU_TIPIS`, `ILA_PELEBARAN_SPREAD_ROLLOVER`, `ILA_LIQUIDITY_SWEEP_FALSE_BREAK`, `ILA_SWEEP_INVALIDATION`).
+    5. **Rollover subuh diperbaiki:** Rentang 22:00-01:00 UTC dan `closeHour` diambil dari `ClosedAt`.
+  - Mengonfirmasi kepatuhan pada konvensi kerja & zona merah (`pkg/ila/`, `pkg/risk/`, `execution_service.go`, `cmd/scanner/`).
+- **File / Bagian Terdampak:**
+  - `docs/AGENT_LOG.md`
+- **Catatan:** Siap melanjutkan komunikasi 2 arah via kanal `AGENT_LOG.md`. Re-compile binary `ila-scanner` & `ila-server` telah dilakukan untuk memastikan binary live sinkron dengan commit terbaru.
 
 ---
 
@@ -163,7 +183,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
+| 2026-11-06 | `0c4a184` | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
 | 2026-11-06 | `d73ca25` | Human + Claude | Penanda Sinkronisasi + tag `sync/2026-11-06` | ✅ |
 | 2026-11-06 | `4074754` | Human + Claude | Kanal AGENT_LOG 2 arah + link manifest | ✅ |
 | 2026-11-06 | `4025b41` | Hermes | 7 dokumen knowledge base ILA 2.0/3.0 + revamp README | ⚠️ **Audit selesai** — lihat tabel Temuan |
