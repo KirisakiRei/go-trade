@@ -224,6 +224,18 @@ func isActiveSession(sess string) bool {
 	return false
 }
 
+// isMarketClosed: weekend (Sabtu/Minggu penuh) atau rollover 22:00-01:00 UTC.
+func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
+	if utcDay == time.Saturday || utcDay == time.Sunday {
+		return true
+	}
+	// Rollover subuh: 22:00 - 01:00 UTC (05:00 - 08:00 WIB).
+	if utcHour >= 22 || utcHour < 1 {
+		return true
+	}
+	return false
+}
+
 func determineNextAction(grade, bias, m15Ph, m15St string, rr float64) string {
 	if rr > 0 && rr < MinRR {
 		return fmt.Sprintf("⏳ Tahan Dulu: Rasio R:R (1:%.2f) belum mencapai syarat minimal 1:2. Menunggu harga koreksi lebih dalam mendekati level SL.", rr)
@@ -522,32 +534,32 @@ func main() {
 				}
 			}
 
-				status := "CLOSED_SL"
-				outcomeR := -1.0
-				if hitTP {
-					status = "CLOSED_TP"
-					outcomeR = pos.RiskReward
-				}
-
-				now := time.Now().UTC()
-				db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
-					"status":      status,
-					"exit_price":  exitPrice,
-					"profit_loss": actualPnL,
-					"outcome_r":   outcomeR,
-					"closed_at":   now,
-				})
-
-				pos.Status = status
-				pos.ExitPrice = exitPrice
-				pos.ProfitLoss = actualPnL
-				pos.OutcomeR = outcomeR
-				pos.ClosedAt = &now
-
-				// Run post-trade self learning evaluation
-				_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
+			status := "CLOSED_SL"
+			outcomeR := -1.0
+			if hitTP {
+				status = "CLOSED_TP"
+				outcomeR = pos.RiskReward
 			}
+
+			now := time.Now().UTC()
+			db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
+				"status":      status,
+				"exit_price":  exitPrice,
+				"profit_loss": actualPnL,
+				"outcome_r":   outcomeR,
+				"closed_at":   now,
+			})
+
+			pos.Status = status
+			pos.ExitPrice = exitPrice
+			pos.ProfitLoss = actualPnL
+			pos.OutcomeR = outcomeR
+			pos.ClosedAt = &now
+
+			// Run post-trade self learning evaluation
+			_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 		}
+	}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)
@@ -615,11 +627,12 @@ func main() {
 	nowUtc := time.Now().UTC()
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
-	isWeekend := utcDay == time.Saturday || (utcDay == time.Sunday && utcHour < 22)
-	isRollover := utcHour >= 22 && utcHour < 24 // 05:00 - 07:00 WIB
+	marketClosed := isMarketClosed(utcDay, utcHour)
+	isWeekend := utcDay == time.Saturday || utcDay == time.Sunday
+	isRollover := utcHour >= 22 || utcHour < 1     // 05:00 - 08:00 WIB
 	isOverlap := (utcHour >= 12 && utcHour < 17)   // 19:00 - 00:00 WIB
 	isLondonOnly := (utcHour >= 7 && utcHour < 12) // 14:00 - 19:00 WIB
-	isNYOnly := (utcHour >= 17 && utcHour < 22)   // 00:00 - 05:00 WIB
+	isNYOnly := (utcHour >= 17 && utcHour < 22)    // 00:00 - 05:00 WIB
 
 	currentSession := "ASIAN_SESSION"
 	if isWeekend {
@@ -651,6 +664,12 @@ func main() {
 	}
 
 	// 7. ILA (Imaginary Liquidity) Multi-Timeframe Scan & Auto-Execution
+	// Market closed (weekend / rollover) -> skip scan & execution entirely.
+	if marketClosed {
+		saveState(state)
+		return
+	}
+
 	ilaService := service.NewILAService(feedProvider)
 	allILAPairs := []struct {
 		HTF      string
@@ -705,8 +724,10 @@ func main() {
 
 					if isTradeLocked {
 						if prevILA.LastStatus != "DAILY_TRADE_LOCK" || prevILA.LastBreakTime != breakTimeStr {
-							messages = append(messages, fmt.Sprintf("⚠️ **[EKSEKUSI ILA DIKUNCI] %s %s • %s**\n• Mode: ILA (%s ➡️ %s) Siap Entry.\n• **Alasan Tidak Eksekusi:** %s",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, tradeLockReason))
+							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi ditahan:** %s\n• **Keputusan di tangan Anda:** entry manual jika setuju dengan setup ini.",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+								formatPrice(sym, setup.EntryPrice), formatPrice(sym, setup.StopLoss), formatPrice(sym, setup.TakeProfit), setup.RiskReward,
+								tradeLockReason))
 							prevILA.LastBreakTime = breakTimeStr
 							prevILA.LastStatus = "DAILY_TRADE_LOCK"
 							prevILA.LastHTFStatus = setup.Status
@@ -722,8 +743,10 @@ func main() {
 						if prevILA.LastStatus != "OPEN_POS_HOLD" || prevILA.LastBreakTime != breakTimeStr {
 							var existingPos model.Position
 							db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).First(&existingPos)
-							messages = append(messages, fmt.Sprintf("⏳ **[SKIP EKSEKUSI ILA] %s %s • %s**\n• Mode: ILA (%s ➡️ %s) Siap Entry.\n• **Alasan Tidak Eksekusi:** Masih ada posisi aktif ILA (#%s %s %.2f lot) yang sedang berjalan.",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize))
+							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi ditahan:** masih ada posisi ILA terbuka (#%s %s %.2f lot).\n• **Keputusan di tangan Anda:** entry manual jika setuju, atau tunggu posisi lama selesai.",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+								formatPrice(sym, setup.EntryPrice), formatPrice(sym, setup.StopLoss), formatPrice(sym, setup.TakeProfit), setup.RiskReward,
+								existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize))
 							prevILA.LastBreakTime = breakTimeStr
 							prevILA.LastStatus = "OPEN_POS_HOLD"
 							prevILA.LastHTFStatus = setup.Status
@@ -737,7 +760,7 @@ func main() {
 					tp := setup.TakeProfit
 
 					riskPercent := 0.50 // Strictly dynamic 0.5% live equity risk
-					equity := 10000.0 // Default fallback equity
+					equity := 10000.0   // Default fallback equity
 					acc, err := tradeBroker.GetAccountInfo(ctx)
 					if err == nil && acc != nil && acc.Equity > 0 {
 						equity = acc.Equity

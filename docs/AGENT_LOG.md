@@ -69,6 +69,36 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 
 ## ⬇️ DARI HUMAN KE HERMES
 
+### [2026-11-06] PERBAIKAN — Market-hours gate, wording notifikasi, & pisah notif vs eksekusi
+- **Pelaku:** Human + Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI (perlu `git pull` + rebuild oleh Hermes)
+- **Ringkasan:**
+  - **Scan hanya saat market buka.** Ditambahkan `isMarketClosed()` di `cmd/scanner/main.go`:
+    - Sabtu penuh + Minggu penuh → **tutup** (tidak scan, tidak eksekusi). Pasar dianggap mulai **Senin**.
+    - Rollover **22:00–01:00 UTC** (05:00–08:00 WIB, spread lebar) → **skip**.
+    - Selain itu → scan normal. (Efektif aktif ≈ 05:00–23:00 WIB, hari kerja.)
+  - **Fix bug rollover bocor 1 jam** di scanner: sebelumnya `utcHour >= 22 && utcHour < 24`, kini `utcHour >= 22 || utcHour < 1`. Diselaraskan dgn evaluator & bbma_service.
+  - **Notif tetap jalan, eksekusi tetap ditahan.** Saat ada posisi open / kuota habis / sudah 1 win, setup valid **tetap dikirim** sebagai notifikasi keputusan manual.
+  - **Wording notifikasi diperbaiki** (lebih jelas & actionable):
+    - Judul: `🎯 [SETUP ILA VALID - ENTRY MANUAL]`
+    - Isi: Entry/SL/TP + R:R, alasan auto ditahan, dan kalimat `Keputusan di tangan Anda: entry manual jika setuju…`
+    - `LockReason` di `GetDailyTradeStatusWIB` dibuat lebih netral (tanpa emoji *warning* + tidak lagi menyebut angka internal yang salah).
+  - **Posisi terbuka tidak disentuh.** SL/TP tetap server-side di broker; engine pasif. Tidak ada market-close sepihak.
+- **File Terdampak:**
+  - `cmd/scanner/main.go` — `isMarketClosed()`, early-return saat tutup, wording 2 notif
+  - `internal/repository/position_repository.go` — wording `LockReason`
+- **Cara Verifikasi:**
+  ```bash
+  go build ./...   # bersih
+  go vet ./...     # bersih
+  go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # PASS
+  ```
+  `isMarketClosed` sudah diuji langsung (Senin–Jumat buka, Sabtu/Minggu tutup, rollover 22–01 skip).
+- **Catatan:** Hermes perlu `git pull`, rebuild binary, lalu restart daemon live.
+
+---
+
 ### [2026-11-06] PERBAIKAN — Audit bug jalur eksekusi ILA & risk engine (7 file)
 - **Pelaku:** Human + Claude
 - **Tipe:** PERBAIKAN
@@ -218,6 +248,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
 | 2026-11-06 | `0183e5d` | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |
+| 2026-11-06 | *(pending)* | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
 | 2026-11-06 | `2833de1` | Hermes | Konfirmasi review & verifikasi audit perbaikan jalur eksekusi & risk | ✅ |
 | 2026-11-06 | `0c4a184` | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
 | 2026-11-06 | `d73ca25` | Human + Claude | Penanda Sinkronisasi + tag `sync/2026-11-06` | ✅ |

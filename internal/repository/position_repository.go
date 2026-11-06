@@ -84,13 +84,13 @@ func (r *positionRepository) ClosePosition(ctx context.Context, ticket string, e
 		Model(&model.Position{}).
 		Where("ticket_number = ?", ticket).
 		Updates(map[string]any{
-			"status":       status,
-			"exit_price":   exitPrice,
-			"profit_loss":  pnl,
-			"outcome_r":    outcomeR,
-			"closed_at":    &now,
-			"notes":        notes,
-			"updated_at":   now,
+			"status":      status,
+			"exit_price":  exitPrice,
+			"profit_loss": pnl,
+			"outcome_r":   outcomeR,
+			"closed_at":   &now,
+			"notes":       notes,
+			"updated_at":  now,
 		}).Error
 }
 
@@ -127,7 +127,7 @@ func (r *positionRepository) GetDailyTradeStatusWIB(ctx context.Context, now tim
 			DateWIB:    dateStr,
 			OpenTrades: len(allOpen),
 			CanTrade:   false,
-			LockReason: fmt.Sprintf("Ada posisi aktif (%s %s) yang sedang berjalan di pasar.", allOpen[0].Symbol, allOpen[0].Direction),
+			LockReason: fmt.Sprintf("Masih ada posisi terbuka (%s %s) yang belum ditutup broker.", allOpen[0].Symbol, allOpen[0].Direction),
 		}, nil
 	}
 
@@ -160,17 +160,17 @@ func (r *positionRepository) GetDailyTradeStatusWIB(ctx context.Context, now tim
 	}
 
 	// Evaluasi aturan harian:
-	// Rule 1: Jika sudah 1x WIN -> Selesai / Kunci eksekusi
+	// Rule 1: Jika sudah 1x WIN -> Selesai / Kunci eksekusi otomatis
 	if winTrades >= 1 {
 		res.CanTrade = false
-		res.LockReason = fmt.Sprintf("🎯 TARGET HARIAN TERCAPAI: Hari ini (%s WIB) sudah mencatat kemenangan (%d WIN). Eksekusi ditutup untuk mengamankan profit harian!", dateStr, winTrades)
+		res.LockReason = fmt.Sprintf("Sudah ada 1 WIN hari ini (%s WIB). Auto-eksekusi ditutup untuk mengamankan profit harian.", dateStr)
 		return res, nil
 	}
 
 	// Rule 2: Jika sudah 2 trade (apapun hasilnya) -> Jatah habis
 	if totalTrades >= 2 {
 		res.CanTrade = false
-		res.LockReason = fmt.Sprintf("🛑 JATAH TRADE HARIAN HABIS (Max 2 Trades / 2-Strike): Kuota 2 trade harian (%s WIB) telah tercapai (%d Kalah). Eksekusi dikunci demi menjaga batas drawdown prop firm!", dateStr, lossTrades)
+		res.LockReason = fmt.Sprintf("Kuota 2 trade harian (%s WIB) sudah terpakai. Auto-eksekusi ditutup demi menjaga batas drawdown prop firm.", dateStr)
 		return res, nil
 	}
 
