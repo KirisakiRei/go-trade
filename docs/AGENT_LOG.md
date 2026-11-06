@@ -204,7 +204,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 ### [2026-11-06] PERBAIKAN BUG FATAL — Perbaikan Pemetaan Simbol Scanner & Evaluator Siklus Sweep Multi-Candle
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN
-- **Status:** 🟢 SELESAI
+- **Status:** 🟢 SELESAI (Catatan: Logika loop seluruh FVG di commit ini telah disempurnakan di commit `3e5615d` menjadi `latestFVG` tunggal sesuai arahan user)
 - **Ringkasan:**
   - **Fix Simbol Scanner Tertukar (`cmd/scanner/main.go`):**
     - Mengganti kode `if !strings.Contains(sym, "XAU") { symName = "EUR/USD" }` dengan fungsi pemetaan presisi `getSymbolDisplay(sym)`.
@@ -212,13 +212,12 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
   - **Fix Evaluator Siklus Sweep Multi-Candle (`pkg/ila/evaluator.go`):**
     - Menghapus pembatasan prematur `if k < n-2 { continue }` yang sebelumnya langsung membuang sweep Candle 4 begitu Candle 6 dibuka.
     - Menggantinya dengan validasi struktural deterministik: sweep Candle 4 tetap aktif selama ekor ekstremnya belum ditembus, FVG belum tertutup penuh, dan target DOL belum tercapai.
-    - Menelusuri seluruh `activeFVGs` unmitigated secara berurutan agar setup sweep yang sedang berjalan tidak terhapus oleh kemunculan FVG minor baru.
-    - Mengunci jendela pencarian LTF CISD dimulai dari saat Candle 4 closed hingga candle running saat ini, serta mengunci Stop Loss pada ekor ekstrem Candle 4.
+    - Mengunci jendela pencarian LTF CISD dimulai dari saat Candle 4 closed hingga candle running saat ini, dengan Stop Loss order riil tetap mengacu pada ekstrim Candle 5 (`cisd.ExtremeSL`) dan ekor Candle 4 sebagai batas invalidasi.
   - **Hasil Uji:**
     - `go build ./...` ➡️ BERSIH (exit 0)
     - `go vet ./...` ➡️ BERSIH (exit 0)
     - `go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...` ➡️ PASS 100% (exit 0)
-    - Setup EURUSD H1 ➡️ M5 (Sweep jam 10:00 Broker dan CISD di M5) kini berhasil terdeteksi dengan tepat sebagai BEARISH (SELL)!
+    - Setup EURUSD H1 ➡️ M5 (Sweep jam 10:00 Broker dan CISD di M5) berhasil terdeteksi sebagai BEARISH (SELL).
   - **Binary & Daemon:**
     - `bin/ila-cli`, `bin/ila-scanner`, dan `bin/ila-server` telah di-rebuild dan daemon live aktif.
 
