@@ -122,6 +122,23 @@ func calcLot(symbol string, entry, sl, riskAmount float64) float64 {
 	return lot
 }
 
+func getSymbolDisplay(sym string) (string, string) {
+	upper := strings.ToUpper(sym)
+	if strings.Contains(upper, "XAU") || strings.Contains(upper, "GOLD") {
+		return "XAU/USD", "🟡"
+	}
+	if strings.Contains(upper, "EUR") {
+		return "EUR/USD", "💶"
+	}
+	if strings.Contains(upper, "USTEC") || strings.Contains(upper, "NAS") || strings.Contains(upper, "US100") {
+		return "USTEC (NAS100)", "📈"
+	}
+	if strings.Contains(upper, "GBP") {
+		return "GBP/USD", "💷"
+	}
+	return sym, "🌐"
+}
+
 func formatPrice(symbol string, val float64) string {
 	if strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD") || strings.Contains(symbol, "NAS") || strings.Contains(symbol, "TEC") || strings.Contains(symbol, "US100") {
 		return fmt.Sprintf("%.2f", val)
@@ -342,10 +359,7 @@ func makeBBMASessionTable(analyses map[string]*dto.MTFAnalysisResponse, state Mo
 		if !ok {
 			continue
 		}
-		sName := "XAU/USD"
-		if !strings.Contains(sym, "XAU") {
-			sName = "EUR/USD"
-		}
+		sName, _ := getSymbolDisplay(sym)
 		biasStr := "⚪ Netr"
 		if d.Bias == "BEARISH" {
 			biasStr = "🔴 Sell"
@@ -586,12 +600,7 @@ func main() {
 			if ev.ProfitLoss < 0 {
 				pnlSign = ""
 			}
-			sEmoji := "🟡"
-			sName := "XAU/USD"
-			if !strings.Contains(ev.Symbol, "XAU") {
-				sEmoji = "💶"
-				sName = "EUR/USD"
-			}
+			sName, sEmoji := getSymbolDisplay(ev.Symbol)
 			pnlPercent := (ev.ProfitLoss / currBal) * 100.0
 
 			closeMsg := fmt.Sprintf(`%s
@@ -683,12 +692,7 @@ func main() {
 	}
 
 	for _, sym := range Pairs {
-		symEmoji := "🟡"
-		symName := "XAU/USD"
-		if !strings.Contains(sym, "XAU") {
-			symEmoji = "💶"
-			symName = "EUR/USD"
-		}
+		symName, symEmoji := getSymbolDisplay(sym)
 
 		var ilaRows []ILARowDisplay
 		var changedPairTitle string

@@ -22,6 +22,10 @@ import (
 
 func main() {
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
+	// Sanitize os.Args if user passed subcommand "analyze" or "scan"
+	if len(os.Args) > 1 && (os.Args[1] == "analyze" || os.Args[1] == "scan") {
+		os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
+	}
 	symbol := flag.String("symbol", "XAUUSD", "Market symbol to analyze")
 	limit := flag.Int("limit", 100, "Number of candles to evaluate")
 	format := flag.String("format", "text", "Output format: text or json")

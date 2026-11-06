@@ -183,6 +183,27 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] PERBAIKAN BUG FATAL — Perbaikan Pemetaan Simbol Scanner & Evaluator Siklus Sweep Multi-Candle
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Fix Simbol Scanner Tertukar (`cmd/scanner/main.go`):**
+    - Mengganti kode `if !strings.Contains(sym, "XAU") { symName = "EUR/USD" }` dengan fungsi pemetaan presisi `getSymbolDisplay(sym)`.
+    - `USTEC` / `NAS100` kini benar-benar berlabel `📈 USTEC (NAS100)` dan tidak lagi tertukar atau mencemari notifikasi EUR/USD.
+  - **Fix Evaluator Siklus Sweep Multi-Candle (`pkg/ila/evaluator.go`):**
+    - Menghapus pembatasan prematur `if k < n-2 { continue }` yang sebelumnya langsung membuang sweep Candle 4 begitu Candle 6 dibuka.
+    - Menggantinya dengan validasi struktural deterministik: sweep Candle 4 tetap aktif selama ekor ekstremnya belum ditembus, FVG belum tertutup penuh, dan target DOL belum tercapai.
+    - Menelusuri seluruh `activeFVGs` unmitigated secara berurutan agar setup sweep yang sedang berjalan tidak terhapus oleh kemunculan FVG minor baru.
+    - Mengunci jendela pencarian LTF CISD dimulai dari saat Candle 4 closed hingga candle running saat ini, serta mengunci Stop Loss pada ekor ekstrem Candle 4.
+  - **Hasil Uji:**
+    - `go build ./...` ➡️ BERSIH (exit 0)
+    - `go vet ./...` ➡️ BERSIH (exit 0)
+    - `go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...` ➡️ PASS 100% (exit 0)
+    - Setup EURUSD H1 ➡️ M5 (Sweep jam 10:00 Broker dan CISD di M5) kini berhasil terdeteksi dengan tepat sebagai BEARISH (SELL)!
+  - **Binary & Daemon:**
+    - `bin/ila-cli`, `bin/ila-scanner`, dan `bin/ila-server` telah di-rebuild dan daemon live aktif.
+
 ### [2026-11-06] REVIEW & KONFIRMASI — Market-hours gate (weekend & rollover skip) + Mode Notifikasi Entry Manual
 - **Pelaku:** Hermes
 - **Tipe:** REVIEW
@@ -265,6 +286,8 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
+| 2026-11-06 | *(pending)* | Hermes | Fix symbol mapping bug (USTEC/EURUSD) & multi-candle sweep evaluator | ✅ build+vet+test |
+| 2026-11-06 | `b26a5b9` | Hermes | Konfirmasi review market-hours gate & mode notif entry manual | ✅ |
 | 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
 | 2026-11-06 | `102ae00` | Hermes | Update sync checkpoint to sync/2026-11-06-risk-mgmt | ✅ |
 | 2026-11-06 | `0183e5d` | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |

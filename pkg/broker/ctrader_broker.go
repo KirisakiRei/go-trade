@@ -226,7 +226,7 @@ func (b *CTraderBroker) ExecuteOrder(ctx context.Context, req OrderRequest) (*Or
 	}
 
 	digits := 2
-	if !strings.Contains(req.Symbol, "XAU") && !strings.Contains(req.Symbol, "GOLD") {
+	if strings.Contains(req.Symbol, "EUR") || strings.Contains(req.Symbol, "GBP") || strings.Contains(req.Symbol, "AUD") {
 		digits = 5
 	}
 	pow := math.Pow10(digits)
