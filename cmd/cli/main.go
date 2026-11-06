@@ -255,7 +255,7 @@ func main() {
 		} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
 			fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
 			fmt.Printf("  └ Level CISD Acuan: %.5f (Origin deretan opposing leg)\n", setup.CISD.CISDLevel)
-			fmt.Printf("  └ Level SL Terkini: %.5f (Extreme Candle 5)\n", setup.CISD.ExtremeSL)
+			fmt.Printf("  └ Level SL Terkini: %.5f (Low/High Candle 5)\n", setup.CISD.ExtremeSL)
 			fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
 		} else {
 			fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
@@ -485,7 +485,7 @@ func main() {
 	} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
 		fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
 		fmt.Printf("  └ Level CISD Acuan: %.5f (Origin deretan opposing leg)\n", setup.CISD.CISDLevel)
-		fmt.Printf("  └ Level SL Terkini: %.5f (Extreme Candle 5)\n", setup.CISD.ExtremeSL)
+		fmt.Printf("  └ Level SL Terkini: %.5f (Low/High Candle 5)\n", setup.CISD.ExtremeSL)
 		fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
 	} else {
 		fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)

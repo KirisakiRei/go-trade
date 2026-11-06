@@ -90,8 +90,8 @@ func (s *evaluationService) EvaluateClosedTrade(ctx context.Context, pos *model.
 	if !isProfit {
 		if isILA {
 			rootCause = "ILA_SWEEP_INVALIDATION"
-			technicalAnalysis = "Pergerakan harga menembus titik invalidasi ekstrim Candle 5 sebelum mencapai target likuiditas DOL."
-			actionableLesson = "Patuhi batasan invalidasi Candle 5. Jika harga menembus ekstrim Candle 5, setup batal secara objektif tanpa penyesalan."
+			technicalAnalysis = "Pergerakan harga menembus titik batas invalidasi (Low/High) Candle 5 sebelum mencapai target likuiditas DOL."
+			actionableLesson = "Patuhi batas invalidasi Candle 5. Jika harga menembus High/Low Candle 5, setup batal secara objektif tanpa penyesalan."
 		} else {
 			// LOSING TRADE POST-MORTEM (BBMA)
 			openHour := pos.OpenedAt.UTC().Hour()

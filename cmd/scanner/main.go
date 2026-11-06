@@ -401,6 +401,49 @@ func makeILATable(pairs []ILARowDisplay) string {
 	)
 }
 
+func extractTicketIDs(ticket string) (int64, string) {
+	var cPosID int64
+	var mtrID string
+
+	// Extract cTrader ID (numeric after cTrader ... #\d+)
+	if cIdx := strings.Index(ticket, "cTrader"); cIdx != -1 {
+		sub := ticket[cIdx:]
+		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
+			rest := sub[hashIdx+1:]
+			end := strings.IndexAny(rest, ", )")
+			if end != -1 {
+				rest = rest[:end]
+			}
+			cPosID, _ = strconv.ParseInt(rest, 10, 64)
+		}
+	} else if hashIdx := strings.Index(ticket, "#"); hashIdx != -1 {
+		rest := ticket[hashIdx+1:]
+		end := strings.IndexAny(rest, ", )")
+		if end != -1 {
+			rest = rest[:end]
+		}
+		cPosID, _ = strconv.ParseInt(rest, 10, 64)
+	}
+
+	// Extract Match-Trader ID (alphanumeric after Match-Trader ... #W\w+)
+	if mIdx := strings.Index(ticket, "Match-Trader"); mIdx != -1 {
+		sub := ticket[mIdx:]
+		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
+			rest := sub[hashIdx+1:]
+			end := strings.IndexAny(rest, ", )")
+			if end != -1 {
+				rest = rest[:end]
+			}
+			mtrID = rest
+		}
+	}
+
+	if cPosID == 0 {
+		cPosID, _ = strconv.ParseInt(ticket, 10, 64)
+	}
+	return cPosID, mtrID
+}
+
 func main() {
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
@@ -442,32 +485,30 @@ func main() {
 		}
 
 		for _, pos := range openPositions {
-			// Jika tiket gabungan (Dual Broker), lewati pengecekan sederhana ini
-			if strings.Contains(pos.TicketNumber, "&") || strings.Contains(pos.TicketNumber, "Match-Trader") {
+			cPosID, mtrID := extractTicketIDs(pos.TicketNumber)
+			cPosIDStr := strconv.FormatInt(cPosID, 10)
+
+			// Cek apakah posisi masih aktif di salah satu broker
+			isOpen := false
+			if activeMap[pos.TicketNumber] {
+				isOpen = true
+			}
+			if cPosID > 0 && activeMap[cPosIDStr] {
+				isOpen = true
+			}
+			if mtrID != "" && activeMap[mtrID] {
+				isOpen = true
+			}
+			if isOpen {
 				continue
 			}
-			if !activeMap[pos.TicketNumber] {
-				// Cek jika posisi masih ada di cTrader (legacy)
-				if cTraderBroker != nil {
-					cActive, _ := cTraderBroker.GetOpenPositions(ctx)
-					isStillOnCTrader := false
-					for _, cp := range cActive {
-						if cp.TicketNumber == pos.TicketNumber {
-							isStillOnCTrader = true
-							break
-						}
-					}
-					if isStillOnCTrader {
-						continue
-					}
-				}
-				// Closed on cTrader! Fetch deals
-				posID, _ := strconv.ParseInt(pos.TicketNumber, 10, 64)
-				deals, _ := cTraderBroker.GetDealsByPosition(ctx, posID)
 
-				exitPrice := pos.TakeProfit
-				actualPnL := 0.0
+			// Posisi sudah resmi tertutup di server broker! Tarik deal detailnya
+			exitPrice := pos.OpenPrice
+			actualPnL := 0.0
 
+			if cTraderBroker != nil && cPosID > 0 {
+				deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
 				for _, d := range deals {
 					if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
 						exitPrice = d.ExecutionPrice
@@ -475,37 +516,38 @@ func main() {
 						break
 					}
 				}
+			}
 
-				isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
-				tol := 0.50
-				if !isGold {
-					tol = 0.00050
+			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
+			tol := 0.50
+			if !isGold {
+				tol = 0.00050
+			}
+
+			hitTP := false
+			hitSL := false
+
+			if pos.Direction == "BUY" {
+				if exitPrice >= (pos.TakeProfit - tol) {
+					hitTP = true
+				} else if exitPrice <= (pos.StopLoss + tol) {
+					hitSL = true
 				}
+			} else {
+				if exitPrice <= (pos.TakeProfit + tol) {
+					hitTP = true
+				} else if exitPrice >= (pos.StopLoss - tol) {
+					hitSL = true
+				}
+			}
 
-				hitTP := false
-				hitSL := false
-
-				if pos.Direction == "BUY" {
-					if exitPrice >= (pos.TakeProfit - tol) {
-						hitTP = true
-					} else if exitPrice <= (pos.StopLoss + tol) {
-						hitSL = true
-					}
+			if !hitTP && !hitSL {
+				if actualPnL > 0 {
+					hitTP = true
 				} else {
-					if exitPrice <= (pos.TakeProfit + tol) {
-						hitTP = true
-					} else if exitPrice >= (pos.StopLoss - tol) {
-						hitSL = true
-					}
+					hitSL = true
 				}
-
-				if !hitTP && !hitSL {
-					if actualPnL > 0 {
-						hitTP = true
-					} else {
-						hitSL = true
-					}
-				}
+			}
 
 				status := "CLOSED_SL"
 				outcomeR := -1.0
@@ -533,7 +575,6 @@ func main() {
 				_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 			}
 		}
-	}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)
@@ -831,9 +872,13 @@ func main() {
 				Changed:  isPairChanged,
 			})
 
+			finalStatus := setup.Status
+			if prevILA.LastStatus == "ENTRY" && setup.Status == "READY_TO_ENTRY" {
+				finalStatus = "ENTRY"
+			}
 			state.ILAPairs[ilaKey] = ILAPairState{
 				LastBreakTime: prevILA.LastBreakTime,
-				LastStatus:    setup.Status,
+				LastStatus:    finalStatus,
 				LastHTFStatus: setup.Status,
 			}
 		}
