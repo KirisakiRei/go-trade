@@ -87,20 +87,47 @@ func (s *evaluationService) EvaluateClosedTrade(ctx context.Context, pos *model.
 
 	slDist := math.Abs(pos.OpenPrice - pos.StopLoss)
 
+	// Timestamps in UTC are needed for BOTH BBMA and ILA root-cause analysis
+	// (rollover / false-break detection). Previously only the BBMA branch
+	// computed these, and it used OpenedAt for closeHour by mistake.
+	openHour := pos.OpenedAt.UTC().Hour()
+	closeHour := openHour
+	if pos.ClosedAt != nil {
+		closeHour = pos.ClosedAt.UTC().Hour()
+	}
+	// Rollover subuh: 22:00-00:00 UTC (doc 04/06). Hour() is 0..23, so
+	// `openHour < 0` was always false (dead condition). Include 00:00-01:00
+	// UTC as the tail end of the rollover window.
+	isRollover := openHour >= 22 || openHour < 1 || closeHour >= 22 || closeHour < 1
+
 	if !isProfit {
 		if isILA {
-			rootCause = "ILA_SWEEP_INVALIDATION"
-			technicalAnalysis = "Pergerakan harga menembus titik batas invalidasi (Low/High) Candle 5 sebelum mencapai target likuiditas DOL."
-			actionableLesson = "Patuhi batas invalidasi Candle 5. Jika harga menembus High/Low Candle 5, setup batal secara objektif tanpa penyesalan."
+			// ILA losing-trade taxonomy. Previously this was a hardcoded
+			// "ILA_SWEEP_INVALIDATION" for every loss, which made any
+			// downstream evaluator (incl. Hermes) always report the same
+			// cause. We now derive the real cause using the same signals the
+			// BBMA branch uses (thin SL / rollover / fast false break / trend).
+			isTightSL := (isGold && slDist < 4.50) || (!isGold && slDist < 0.0018)
+			switch {
+			case isTightSL:
+				rootCause = "ILA_SL_TERLALU_TIPIS"
+				technicalAnalysis = fmt.Sprintf("Jarak Stop Loss ILA (%.2f) berada di bawah batas struktural minimal. Retracement/wick normal menyapu level SL sebelum harga bergerak ke arah target DOL.", slDist)
+				actionableLesson = "Pastikan SL ILA diletakkan tepat di Low/High Candle 5 dan memenuhi floor minimal (Gold $4.50 / Forex 20 pips) agar tidak tersapu noise."
+			case isRollover:
+				rootCause = "ILA_PELEBARAN_SPREAD_ROLLOVER"
+				technicalAnalysis = fmt.Sprintf("Posisi ILA aktif saat rollover subuh (open %02d:xx UTC, close %02d:xx UTC). Spread melebar tajam dan memicu SL sebelum target DOL tercapai.", openHour, closeHour)
+				actionableLesson = "Hindari menahan posisi ILA baru melewati jendela rollover 22:00-00:00 UTC untuk melindungi modal dari lonjakan spread."
+			case durationMinutes <= 20:
+				rootCause = "ILA_LIQUIDITY_SWEEP_FALSE_BREAK"
+				technicalAnalysis = fmt.Sprintf("Harga berbalik cepat dalam %d menit setelah entry ILA, membentuk ekor jarum yang menembus titik invalidasi Candle 5.", durationMinutes)
+				actionableLesson = "Tunggu konfirmasi body-break-body CISD yang matang; hindari entry saat transisi candle LTF belum stabil."
+			default:
+				rootCause = "ILA_SWEEP_INVALIDATION"
+				technicalAnalysis = "Pergerakan harga menembus titik batas invalidasi (Low/High) Candle 5 sebelum mencapai target likuiditas DOL, mengindikasikan dorongan timeframe besar mendominasi."
+				actionableLesson = "Patuhi batas invalidasi Candle 5. Jika harga menembus High/Low Candle 5, setup batal secara objektif tanpa penyesalan."
+			}
 		} else {
 			// LOSING TRADE POST-MORTEM (BBMA)
-			openHour := pos.OpenedAt.UTC().Hour()
-			closeHour := pos.OpenedAt.UTC().Hour()
-			if pos.ClosedAt != nil {
-				closeHour = pos.ClosedAt.UTC().Hour()
-			}
-
-			isRollover := (openHour >= 22 || openHour < 0) || (closeHour >= 22 || closeHour < 0)
 			isTightSL := (isGold && slDist < 3.0) || (!isGold && slDist < 0.0018)
 
 			if isTightSL {
@@ -246,9 +273,13 @@ func (s *evaluationService) PreFlightCheck(ctx context.Context, symbol, directio
 	}
 
 	isGold := strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD")
+	isIndex := strings.Contains(symbol, "NAS") || strings.Contains(symbol, "TEC") || strings.Contains(symbol, "US100") || strings.Contains(symbol, "US30") || strings.Contains(symbol, "US500") || strings.Contains(symbol, "SPX") || strings.Contains(symbol, "NDX")
+	// Structural SL floor per docs/04: Gold $4.50, Forex 20 pips (0.0020).
 	minAllowedSL := 4.50
-	if !isGold {
-		minAllowedSL = 0.0018
+	if isIndex {
+		minAllowedSL = 0 // indices move in whole points; floor not defined by policy
+	} else if !isGold {
+		minAllowedSL = 0.0020
 	}
 
 	if slDist > 0 && slDist < minAllowedSL {

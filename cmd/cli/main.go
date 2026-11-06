@@ -46,15 +46,17 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error opening db: %v\n", err)
 			os.Exit(1)
 		}
-		_ = db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.Position{})
+		_ = db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
 		setupRepo := repository.NewSetupRepository(db)
 		_ = setupRepo
 		journalRepo := repository.NewJournalRepository(db)
 		positionRepo := repository.NewPositionRepository(db)
+		evalRepo := repository.NewEvaluationRepository(db)
+		evalService := service.NewEvaluationService(evalRepo, positionRepo, feed)
 		cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
 		mtrBroker := broker.NewMatchTraderBroker("")
 		var tradeBroker broker.Broker = broker.NewMultiBrokerManager(mtrBroker, cTraderBroker)
-		execService := service.NewExecutionService(nil, ilaService, positionRepo, journalRepo, tradeBroker, feed)
+		execService := service.NewExecutionService(nil, ilaService, evalService, positionRepo, journalRepo, tradeBroker, feed)
 
 		var res *dto.TradeExecutionResult
 		if *ila {
@@ -245,7 +247,7 @@ func main() {
 			fmt.Printf("  └ Detail           : %s\n\n", setup.HTFSweep.Details)
 		} else {
 			fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
-			fmt.Println("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n")
+			fmt.Printf("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n\n")
 		}
 
 		if setup.CISD != nil && setup.CISD.Detected {
@@ -259,7 +261,7 @@ func main() {
 			fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
 		} else {
 			fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-			fmt.Println("  └ Menunggu konfirmasi CISD (Body break Body).\n")
+			fmt.Printf("  └ Menunggu konfirmasi CISD (Body break Body).\n\n")
 		}
 
 		if setup.Status == "READY_TO_ENTRY" {
@@ -475,7 +477,7 @@ func main() {
 		fmt.Printf("  └ Detail           : %s\n\n", setup.HTFSweep.Details)
 	} else {
 		fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
-		fmt.Println("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n")
+		fmt.Printf("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n\n")
 	}
 
 	if setup.CISD != nil && setup.CISD.Detected {
@@ -489,7 +491,7 @@ func main() {
 		fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
 	} else {
 		fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-		fmt.Println("  └ Menunggu konfirmasi CISD (Body break Body).\n")
+		fmt.Printf("  └ Menunggu konfirmasi CISD (Body break Body).\n\n")
 	}
 
 	if setup.Status == "READY_TO_ENTRY" {
@@ -502,4 +504,3 @@ func main() {
 
 	fmt.Printf("\n👉 Langkah Berikutnya: %s\n", setup.NextAction)
 }
-

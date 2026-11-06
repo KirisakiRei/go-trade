@@ -48,8 +48,8 @@ func SetupRouter(cfg *config.Config, db *gorm.DB) *AppComponents {
 	var activeBroker broker.Broker = broker.NewMultiBrokerManager(mtrBroker, cTraderBroker)
 
 	ilaService := service.NewILAService(feedProvider)
-	executionService := service.NewExecutionService(nil, ilaService, positionRepo, journalRepo, activeBroker, feedProvider)
 	evalService := service.NewEvaluationService(evalRepo, positionRepo, feedProvider)
+	executionService := service.NewExecutionService(nil, ilaService, evalService, positionRepo, journalRepo, activeBroker, feedProvider)
 
 	// Backfill evaluations for any previously closed trades on startup
 	go func() {

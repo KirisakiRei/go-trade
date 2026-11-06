@@ -23,6 +23,7 @@ import (
 type executionService struct {
 	bbmaService    BBMAService
 	ilaService     ILAService
+	evalService    EvaluationService
 	positionRepo   repository.PositionRepository
 	journalRepo    repository.JournalRepository
 	broker         broker.Broker
@@ -34,6 +35,7 @@ type executionService struct {
 func NewExecutionService(
 	bbmaService BBMAService,
 	ilaService ILAService,
+	evalService EvaluationService,
 	positionRepo repository.PositionRepository,
 	journalRepo repository.JournalRepository,
 	b broker.Broker,
@@ -42,6 +44,7 @@ func NewExecutionService(
 	return &executionService{
 		bbmaService:    bbmaService,
 		ilaService:     ilaService,
+		evalService:    evalService,
 		positionRepo:   positionRepo,
 		journalRepo:    journalRepo,
 		broker:         b,
@@ -635,12 +638,16 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		ExecutedAt: time.Now(),
 	}
 
-	// 1. Proteksi Drawdown Harian: Diizinkan lanjut sesuai instruksi user
-	if req.Force {
+	// 1. Proteksi Drawdown Harian (2 Strike & Out): Maksimal 2x SL per hari.
+	// This mirrors the BBMA path: the guard runs for normal executions and is
+	// bypassed only by an explicit `--force` (manual override). Previously this
+	// was inverted (`if req.Force`), which disabled the guard for every real
+	// ILA entry and only checked — with a wrong threshold of 5 — on force runs.
+	if !req.Force {
 		todayLosses, err := s.positionRepo.CountTodayLosses(ctx)
-		if err == nil && todayLosses >= 5 {
+		if err == nil && todayLosses >= 2 {
 			result.Executed = false
-			result.RejectionReason = "🚨 PROTEKSI DRAWDOWN HARIAN: Batas maksimal rugi harian tercapai!"
+			result.RejectionReason = "🚨 PROTEKSI DRAWDOWN HARIAN (2 Strike & Out): Hari ini sudah mengalami 2 kali Stop Loss. Eksekusi ILA dikunci hari ini demi menjaga batas maksimal rugi harian prop firm!"
 			return result, nil
 		}
 	}
@@ -710,6 +717,27 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		result.Executed = false
 		result.RejectionReason = fmt.Sprintf("Kalkulasi risiko gagal: %v", err)
 		return result, nil
+	}
+
+	// 4b. Hard risk gate: reject if broker lot rounding pushed the real risk
+	// above the requested budget (CalculateLot no longer hardcodes PassedRisk).
+	if !riskRes.PassedRisk {
+		result.Executed = false
+		result.RejectionReason = fmt.Sprintf("Risiko aktual (%.3f%%) melebihi target setelah pembulatan lot broker. Entry dibatalkan demi disiplin risiko.", riskRes.RiskPercentage)
+		return result, nil
+	}
+
+	// 4c. Structural Stop-Loss Floor (doc 04): reject overly-thin SL that would
+	// be swept by normal spread/noise. This uses the existing, already-tested
+	// PreFlightCheck threshold (Gold $4.50 / Forex 20 pips) instead of adding
+	// a second, divergent rule. Skipped gracefully if evalService is not wired.
+	if s.evalService != nil {
+		pf, pfErr := s.evalService.PreFlightCheck(ctx, req.Symbol, direction, "ILA_SWEEP_CISD", math.Abs(entryPrice-sl))
+		if pfErr == nil && pf != nil && !pf.CanExecute {
+			result.Executed = false
+			result.RejectionReason = pf.BlockingReason
+			return result, nil
+		}
 	}
 
 	// 5. Execute Order on cTrader Broker

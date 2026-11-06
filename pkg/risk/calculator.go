@@ -2,8 +2,14 @@ package risk
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
+)
+
+const (
+	// MaxLotSize is the hard ceiling for any single position.
+	MaxLotSize = 20.0
 )
 
 var (
@@ -52,6 +58,12 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 	if minRR <= 0 {
 		minRR = 2.0 // Default 1:2
 	}
+	// Safety clamp: never allow a single trade to risk more than 2% of equity,
+	// regardless of what the caller passes. Prevents catastrophic misconfig
+	// (e.g. RiskRatio accidentally set to 100).
+	if riskPercent > 2.0 {
+		riskPercent = 2.0
+	}
 
 	sym := strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
 	isGold := strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD") || strings.Contains(sym, "PAXG")
@@ -95,26 +107,39 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 	if lot < minLot {
 		lot = minLot
 	}
-	if lot > 20.0 {
-		lot = 20.0
+	if lot > MaxLotSize {
+		lot = MaxLotSize
 	}
 
 	rr, passedRR := ValidateRR(entry, sl, tp, minRR)
 
+	// Actual risk after lot clamping. Clamping UP to minLot (e.g. 0.01 on a
+	// tight SL) can silently increase the real risk beyond the requested %.
+	// We must report the ACTUAL risk and only mark PassedRisk when the final
+	// lot does not exceed the requested risk budget.
+	actualRiskAmount := lot * pips * pipValuePerLot
+	actualRiskPercent := (actualRiskAmount / equity) * 100.0
+
+	riskTolerance := 1.05 // allow 5% overshoot for broker lot-step rounding
+	passedRisk := actualRiskPercent <= riskPercent*riskTolerance
+
 	res := &RiskResult{
 		LotSize:        lot,
-		RiskAmount:     math.Round(riskAmount*100) / 100,
-		RiskPercentage: riskPercent,
+		RiskAmount:     math.Round(actualRiskAmount*100) / 100,
+		RiskPercentage: math.Round(actualRiskPercent*1000) / 1000,
 		DistancePips:   math.Round(pips*10) / 10,
 		PipValue:       pipValuePerLot,
 		RiskReward:     rr,
 		PassedRR:       passedRR,
-		PassedRisk:     true,
+		PassedRisk:     passedRisk,
 	}
 
-	if !passedRR {
+	switch {
+	case !passedRR:
 		res.Reason = "R:R ratio below mandatory 1:2"
-	} else {
+	case !passedRisk:
+		res.Reason = fmt.Sprintf("Lot terpaksa dibulatkan ke bawah/atas sehingga risiko aktual (%.3f%%) melebihi target (%.3f%%)", actualRiskPercent, riskPercent)
+	default:
 		res.Reason = "Risk and R:R rules passed"
 	}
 
