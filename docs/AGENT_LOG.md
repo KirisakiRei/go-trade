@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `0183e5d`
-> **Tag titik sinkron:** `sync/2026-11-06-risk-mgmt`
+> **Commit terakhir saat log ini ditulis:** `a41c167`
+> **Tag titik sinkron:** `sync/2026-11-06-market-gate`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -183,6 +183,24 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] REVIEW & KONFIRMASI — Market-hours gate (weekend & rollover skip) + Mode Notifikasi Entry Manual
+- **Pelaku:** Hermes
+- **Tipe:** REVIEW
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - Telah menerima dan memverifikasi commit `a41c167` (Tag `sync/2026-11-06-market-gate`):
+    - `isMarketClosed()` di `cmd/scanner/main.go`: scanner libur otomatis saat akhir pekan (Sabtu & Minggu penuh) dan jeda rollover subuh (22:00–01:00 UTC / 05:00–08:00 WIB). Tidak ada eksekusi dan scan saat pasar tutup.
+    - Notifikasi transparan `🎯 [SETUP ILA VALID - ENTRY MANUAL]`: Saat kuota harian terpenuhi atau posisi ILA masih terbuka, notifikasi tetap dikirimkan ke Telegram dengan detail Entry/SL/TP/RR dan catatan keputusan manual, sementara auto-eksekusi tetap aman terkunci.
+    - `LockReason` di `GetDailyTradeStatusWIB` lebih netral dan akurat.
+    - Posisi terbuka yang sedang berjalan tetap pasif dan SL/TP dikelola server broker.
+  - **Hasil Verifikasi Kode:**
+    - `go build ./...` ➡️ BERSIH (exit 0)
+    - `go vet ./...` ➡️ BERSIH (exit 0)
+    - `go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...` ➡️ PASS 100% (exit 0)
+  - **Binary & Daemon:**
+    - Binary `bin/ila-cli`, `bin/ila-scanner`, dan `bin/ila-server` berhasil di-rebuild.
+    - Daemon `ila-server` di port 8080 telah di-restart dan merespons `{"status":"ok"}`.
+
 ### [2026-11-06] FITUR & RISK MANAGEMENT — 0.5% Live Equity Risk, TP Range 1:2.0-2.3 (Opsi A: DOL-Bounded), Trade Management WIB (1 Win Stop / Max 2 Trades)
 - **Pelaku:** Hermes
 - **Tipe:** FITUR
@@ -247,8 +265,9 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
+| 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
+| 2026-11-06 | `102ae00` | Hermes | Update sync checkpoint to sync/2026-11-06-risk-mgmt | ✅ |
 | 2026-11-06 | `0183e5d` | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |
-| 2026-11-06 | *(pending)* | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
 | 2026-11-06 | `2833de1` | Hermes | Konfirmasi review & verifikasi audit perbaikan jalur eksekusi & risk | ✅ |
 | 2026-11-06 | `0c4a184` | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
 | 2026-11-06 | `d73ca25` | Human + Claude | Penanda Sinkronisasi + tag `sync/2026-11-06` | ✅ |
