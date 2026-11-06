@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `0c4a184`
-> **Tag titik sinkron:** `sync/2026-11-06`
+> **Commit terakhir saat log ini ditulis:** `0183e5d`
+> **Tag titik sinkron:** `sync/2026-11-06-risk-mgmt`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -217,7 +217,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |
+| 2026-11-06 | `0183e5d` | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |
 | 2026-11-06 | `2833de1` | Hermes | Konfirmasi review & verifikasi audit perbaikan jalur eksekusi & risk | ✅ |
 | 2026-11-06 | `0c4a184` | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
 | 2026-11-06 | `d73ca25` | Human + Claude | Penanda Sinkronisasi + tag `sync/2026-11-06` | ✅ |
