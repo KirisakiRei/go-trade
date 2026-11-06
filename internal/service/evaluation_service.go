@@ -87,26 +87,18 @@ func (s *evaluationService) EvaluateClosedTrade(ctx context.Context, pos *model.
 
 	slDist := math.Abs(pos.OpenPrice - pos.StopLoss)
 
-	// Timestamps in UTC are needed for BOTH BBMA and ILA root-cause analysis
-	// (rollover / false-break detection). Previously only the BBMA branch
-	// computed these, and it used OpenedAt for closeHour by mistake.
+	// Jam UTC untuk analisis rollover / false-break (BBMA & ILA).
 	openHour := pos.OpenedAt.UTC().Hour()
 	closeHour := openHour
 	if pos.ClosedAt != nil {
 		closeHour = pos.ClosedAt.UTC().Hour()
 	}
-	// Rollover subuh: 22:00-00:00 UTC (doc 04/06). Hour() is 0..23, so
-	// `openHour < 0` was always false (dead condition). Include 00:00-01:00
-	// UTC as the tail end of the rollover window.
+	// Rollover subuh 22:00-00:00 UTC (termasuk ujung 00:00-01:00).
 	isRollover := openHour >= 22 || openHour < 1 || closeHour >= 22 || closeHour < 1
 
 	if !isProfit {
 		if isILA {
-			// ILA losing-trade taxonomy. Previously this was a hardcoded
-			// "ILA_SWEEP_INVALIDATION" for every loss, which made any
-			// downstream evaluator (incl. Hermes) always report the same
-			// cause. We now derive the real cause using the same signals the
-			// BBMA branch uses (thin SL / rollover / fast false break / trend).
+			// Taksonomi root cause SL untuk ILA (bukan konstanta).
 			isTightSL := (isGold && slDist < 4.50) || (!isGold && slDist < 0.0018)
 			switch {
 			case isTightSL:
@@ -274,10 +266,10 @@ func (s *evaluationService) PreFlightCheck(ctx context.Context, symbol, directio
 
 	isGold := strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD")
 	isIndex := strings.Contains(symbol, "NAS") || strings.Contains(symbol, "TEC") || strings.Contains(symbol, "US100") || strings.Contains(symbol, "US30") || strings.Contains(symbol, "US500") || strings.Contains(symbol, "SPX") || strings.Contains(symbol, "NDX")
-	// Structural SL floor per docs/04: Gold $4.50, Forex 20 pips (0.0020).
+	// Structural SL floor (docs/04): Gold $4.50, Forex 20 pips (0.0020).
 	minAllowedSL := 4.50
 	if isIndex {
-		minAllowedSL = 0 // indices move in whole points; floor not defined by policy
+		minAllowedSL = 0 // indeks bergerak per poin, tanpa floor
 	} else if !isGold {
 		minAllowedSL = 0.0020
 	}

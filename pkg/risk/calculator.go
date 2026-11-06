@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	// MaxLotSize is the hard ceiling for any single position.
+	// MaxLotSize: batas maksimal lot per posisi.
 	MaxLotSize = 20.0
 )
 
@@ -58,9 +58,7 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 	if minRR <= 0 {
 		minRR = 2.0 // Default 1:2
 	}
-	// Safety clamp: never allow a single trade to risk more than 2% of equity,
-	// regardless of what the caller passes. Prevents catastrophic misconfig
-	// (e.g. RiskRatio accidentally set to 100).
+	// Clamp risiko maksimal 2% per trade (proteksi salah konfigurasi).
 	if riskPercent > 2.0 {
 		riskPercent = 2.0
 	}
@@ -113,14 +111,11 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 
 	rr, passedRR := ValidateRR(entry, sl, tp, minRR)
 
-	// Actual risk after lot clamping. Clamping UP to minLot (e.g. 0.01 on a
-	// tight SL) can silently increase the real risk beyond the requested %.
-	// We must report the ACTUAL risk and only mark PassedRisk when the final
-	// lot does not exceed the requested risk budget.
+	// Risiko aktual setelah pembulatan lot (clamp ke minLot bisa menaikkan risiko).
 	actualRiskAmount := lot * pips * pipValuePerLot
 	actualRiskPercent := (actualRiskAmount / equity) * 100.0
 
-	riskTolerance := 1.05 // allow 5% overshoot for broker lot-step rounding
+	riskTolerance := 1.05 // toleransi 5% untuk pembulatan lot broker
 	passedRisk := actualRiskPercent <= riskPercent*riskTolerance
 
 	res := &RiskResult{

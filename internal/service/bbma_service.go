@@ -843,8 +843,7 @@ func (s *bbmaService) AnalyzeMTF(ctx context.Context, req dto.MTFAnalysisRequest
 	// New York: 08:00 - 17:00 EST (13:00 - 22:00 UTC / 20:00 - 05:00 WIB)
 	// Overlap London - New York: 13:00 - 17:00 UTC (20:00 - 00:00 WIB)
 	// Rollover Subuh: 22:00 - 24:00 UTC (05:00 - 07:00 WIB)
-	// utcHour is 0..23, so `utcHour < 0` is dead. Rollover is 22:00-00:00 UTC;
-	// include the 00:00-01:00 UTC tail so the window matches the docs.
+	// Rollover subuh 22:00-00:00 UTC (Cek jam 0-1 sebagai ujung window).
 	isRollover := !isCrypto && (utcHour >= 22 || utcHour < 1)
 	isLondonNY := (utcHour >= 8 && utcHour < 22)   // 15:00 - 05:00 WIB
 	isOverlap := (utcHour >= 13 && utcHour < 17)   // 20:00 - 00:00 WIB (Puncak Likuiditas)

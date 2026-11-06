@@ -638,11 +638,8 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		ExecutedAt: time.Now(),
 	}
 
-	// 1. Proteksi Drawdown Harian (2 Strike & Out): Maksimal 2x SL per hari.
-	// This mirrors the BBMA path: the guard runs for normal executions and is
-	// bypassed only by an explicit `--force` (manual override). Previously this
-	// was inverted (`if req.Force`), which disabled the guard for every real
-	// ILA entry and only checked — with a wrong threshold of 5 — on force runs.
+	// 1. Proteksi Drawdown Harian (2 Strike & Out): maksimal 2x SL per hari.
+	// `--force` tetap bisa bypass untuk override manual.
 	if !req.Force {
 		todayLosses, err := s.positionRepo.CountTodayLosses(ctx)
 		if err == nil && todayLosses >= 2 {
@@ -719,18 +716,14 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		return result, nil
 	}
 
-	// 4b. Hard risk gate: reject if broker lot rounding pushed the real risk
-	// above the requested budget (CalculateLot no longer hardcodes PassedRisk).
+	// 4b. Tolak jika pembulatan lot membuat risiko aktual melebihi target.
 	if !riskRes.PassedRisk {
 		result.Executed = false
 		result.RejectionReason = fmt.Sprintf("Risiko aktual (%.3f%%) melebihi target setelah pembulatan lot broker. Entry dibatalkan demi disiplin risiko.", riskRes.RiskPercentage)
 		return result, nil
 	}
 
-	// 4c. Structural Stop-Loss Floor (doc 04): reject overly-thin SL that would
-	// be swept by normal spread/noise. This uses the existing, already-tested
-	// PreFlightCheck threshold (Gold $4.50 / Forex 20 pips) instead of adding
-	// a second, divergent rule. Skipped gracefully if evalService is not wired.
+	// 4c. Structural SL floor (docs/04): tolak SL terlalu tipis.
 	if s.evalService != nil {
 		pf, pfErr := s.evalService.PreFlightCheck(ctx, req.Symbol, direction, "ILA_SWEEP_CISD", math.Abs(entryPrice-sl))
 		if pfErr == nil && pf != nil && !pf.CanExecute {
