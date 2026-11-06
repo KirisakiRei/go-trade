@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `ae6ebb6`
-> **Tag titik sinkron:** `sync/2026-11-06-fix-evaluator-symbols`
+> **Commit terakhir saat log ini ditulis:** `59b8737`
+> **Tag titik sinkron:** `sync/2026-11-06-ila3-integrated`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -350,7 +350,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Hermes | Integrate ILA 3.0 packages & binaries into go-trade repo (Single Project) | ✅ build+vet+test |
+| 2026-11-06 | `59b8737` | Hermes | Integrate ILA 3.0 packages & binaries into go-trade repo (Single Project) | ✅ build+vet+test |
 | 2026-11-06 | `2c2debd` | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ |
 | 2026-11-06 | `716cac8` | Hermes | Isolate ILA 2.0 to Match-Trader only and document ILA 3.0 cTrader integration | ✅ |
 | 2026-11-06 | `643e108` | Hermes | Clarify chronological transition from multi-fvg draft to strict latest-fvg | ✅ |
