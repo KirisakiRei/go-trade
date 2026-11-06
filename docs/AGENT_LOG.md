@@ -183,6 +183,32 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] INTEGRASI REPO TUNGGAL — Penyatuan ILA 3.0 ke dalam Repo go-trade (Single Project, Multi-Binary)
+- **Pelaku:** Hermes
+- **Tipe:** FITUR
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Penyatuan Kode Sumber ke dalam Repo Utama `go-trade` (`/opt/data/ila-engine`):**
+    - Sesuai arahan user, seluruh paket dan engine ILA 3.0 telah diintegrasikan langsung ke dalam repositori tunggal `go-trade` tanpa mengganggu struktur atau kode ILA 2.0 sedikit pun.
+    - **Paket Algoritma ILA 3.0 Baru di `pkg/`:**
+      - `pkg/keylevels/` ➡️ Deteksi ERL (External Range Liquidity) & IRL (Internal Range Liquidity).
+      - `pkg/quarterly/` ➡️ Quarterly Theory (Q1-Q4 Daily NY Time & 90-min sub-cycle) + Q1 Exception Rule.
+      - `pkg/ssmt/` ➡️ Sequential SMT Correlation & Divergence (XAUUSD vs XAGUSD, EURUSD vs GBPUSD, USTEC vs US500).
+      - `pkg/stdev/` ➡️ ICT Standard Deviation Fibonacci Projection (-1.0, -2.0 s.d. -2.5 partial TP, -3.5 s.d. -4.0 final target).
+      - `pkg/sequence/` ➡️ Macro Sequence Evaluator ILA 3.0 (ERL Reversal Entry 1, IRL Retrace Entry 2, Waypoint FVG filter, Nested R:R).
+    - **Binary & Perintah Eksekusi Baru di `cmd/` & `bin/`:**
+      - `bin/ila3-cli` (`cmd/ila3-cli`) ➡️ CLI analyzer ILA 3.0 multi-mode (New Day 4H->1H->5m, New Week D1->4H->15m).
+      - `bin/ila3-scanner` (`cmd/ila3-scanner`) ➡️ Background scanner cTrader dedikasi (Auto-execution, trailing checkpoints, dan Telegram alert).
+      - `bin/ila3-server` (`cmd/ila3-server`) ➡️ REST API ILA 3.0 aktif di port `8082`.
+  - **Status Kompilasi & Pengujian Bersih:**
+    - `go build ./...` ➡️ BERSIH (exit 0)
+    - `go vet ./...` ➡️ BERSIH (exit 0, 0 warning)
+    - `go test -v ./pkg/...` ➡️ PASS 100% (semua unit test ILA 2.0 & ILA 3.0 lulus sempurna).
+  - **Dual-Engine & Dual-Broker Berjalan Serentak:**
+    - Port 8080 (`ila-server`): ILA 2.0 Live pada akun Match-Trader (#1089632).
+    - Port 8082 (`ila3-server`): ILA 3.0 Live pada akun IC Markets cTrader (#10131354).
+    - Cronjob `3bb5433dac8a` (ILA 2.0) dan `93fc06a1b574` (ILA 3.0) berjalan mandiri tiap 15 menit.
+
 ### [2026-11-06] ARSITEKTUR DUAL-BROKER DEDIKASI — ILA 2.0 di Match-Trader (#1089632) & ILA 3.0 di cTrader (#10131354)
 - **Pelaku:** Hermes
 - **Tipe:** FITUR
@@ -324,7 +350,9 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | `716cac8` | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ build+vet+test |
+| 2026-11-06 | *(pending)* | Hermes | Integrate ILA 3.0 packages & binaries into go-trade repo (Single Project) | ✅ build+vet+test |
+| 2026-11-06 | `2c2debd` | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ |
+| 2026-11-06 | `716cac8` | Hermes | Isolate ILA 2.0 to Match-Trader only and document ILA 3.0 cTrader integration | ✅ |
 | 2026-11-06 | `643e108` | Hermes | Clarify chronological transition from multi-fvg draft to strict latest-fvg | ✅ |
 | 2026-11-06 | `3e5615d` | Hermes | Strictly lock evaluation to latest active unmitigated FVG + separate bubbles | ✅ build+vet+test |
 | 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |

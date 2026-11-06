@@ -12,7 +12,7 @@ bin/
 *.test
 *.out
 server.log
-monitor_state.json
+monitor_state*.json
 
 # IDE & OS files
 .DS_Store
