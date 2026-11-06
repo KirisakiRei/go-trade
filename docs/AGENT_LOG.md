@@ -183,6 +183,24 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] PERBAIKAN ILA 2.0 — Kunci Mutlak FVG Aktif Terbaru (Anti-Mundur ke FVG Usang) & Pemisahan Bubble Notifikasi Telegram
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Kunci Mutlak FVG Aktif Terbaru (`pkg/ila/evaluator.go`):**
+    - Evaluator HTF sweep kini secara ketat HANYA menggunakan `latestFVG := activeFVGs[len(activeFVGs)-1]`.
+    - Dilarang keras melompat mundur ke FVG usang yang sudah terlewati oleh siklus gelombang baru.
+    - Status XAUUSD H1 ➡️ M5 kini konsisten **🟢 Buy (Bullish)** berpatokan pada FVG Bullish terkini (`4050.58 - 4054.30`), selaras dengan displacement kuat pasar dan bukan lagi keliru Sell ke FVG subuh.
+  - **Pemisahan Bubble Notifikasi Telegram (`scripts/scan_propfirm.py`):**
+    - Bila ada lebih dari 1 update pair yang perlu dilaporkan (misal XAUUSD dan USTEC), script memecah pesan per pair dan mengirimkannya masing-masing ke Telegram via `hermes send --to telegram:808466451` dengan jeda 0.5 detik.
+    - Hasilnya di Telegram: setiap pair tampil rapi dalam bubble terpisah, tidak bertumpuk dalam 1 bubble raksasa.
+  - **Hasil Uji & Verifikasi:**
+    - `go build ./...` ➡️ BERSIH (exit 0)
+    - `go vet ./...` ➡️ BERSIH (exit 0)
+    - `go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...` ➡️ PASS 100% (exit 0)
+    - Binary `bin/ila-cli`, `bin/ila-scanner`, dan `bin/ila-server` di-rebuild. Daemon `ila-server` restart normal.
+
 ### [2026-11-06] PERBAIKAN BUG FATAL — Perbaikan Pemetaan Simbol Scanner & Evaluator Siklus Sweep Multi-Candle
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN
