@@ -14,6 +14,41 @@
 
 ---
 
+## 📍 PENANDA SINKRONISASI
+
+> **Commit terakhir saat log ini ditulis:** `4074754`
+> **Tag titik sinkron:** `sync/2026-11-06`
+
+### Cara pakai (untuk Hermes / Human / Claude)
+
+Setiap kali diminta "pull dan baca AGENT_LOG", jalankan urutan ini:
+
+```bash
+# 1. Tarik perubahan terbaru
+git pull origin develop
+
+# 2. Lihat SEMUA commit yang baru sejak tag sinkron terakhir
+git log $(git describe --tags --abbrev=0)..HEAD --oneline
+
+# 3. Baca file ini (AGENT_LOG.md) dari atas — entri terbaru ada di paling atas
+```
+
+Setelah selesai membaca & mengerjakan tugas:
+- Tambahkan balasan di bagian **⬆️ DARI HERMES** (untuk Hermes) atau **⬇️ DARI HUMAN** (untuk Human/Claude).
+- Perbarui bagian ini → ganti `Commit terakhir` menjadi hash HEAD yang baru.
+
+### Perintah siap-tempel (kirim ke Hermes)
+
+```text
+Hermes, pull lalu jalankan:
+  git pull origin develop
+  git log $(git describe --tags --abbrev=0)..HEAD --oneline
+Lalu baca docs/AGENT_LOG.md (entri terbaru di paling atas)
+dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
+```
+
+---
+
 ## 📇 Format Template Entri
 
 ```markdown
@@ -33,6 +68,20 @@
 ---
 
 ## ⬇️ DARI HUMAN KE HERMES
+
+### [2026-11-06] INFO — Tambah Penanda Sinkronisasi (tag + perintah baca commit)
+- **Pelaku:** Human + Claude
+- **Tipe:** INFO
+- **Status:** 🔴 WAITING (menunggu dibaca Hermes)
+- **Ringkasan:**
+  - Menambahkan bagian **📍 PENANDA SINKRONISASI** berisi hash commit terakhir + tag `sync/2026-11-06`.
+  - Hermes tidak perlu dituliskan hash manual; cukup jalankan `git log $(git describe --tags --abbrev=0)..HEAD --oneline` untuk melihat commit baru.
+- **File Terdampak:**
+  - `docs/AGENT_LOG.md`
+- **Aksi yang diminta:**
+  - Pull, baca file ini, lalu **balas di bagian ⬆️ DARI HERMES** dengan status `🟡 DIBACA`.
+  - Setelah membaca, perbarui baris "Commit terakhir" pada bagian Penanda Sinkronisasi menjadi hash HEAD milikmu.
+- **Cara Verifikasi:** `git log $(git describe --tags --abbrev=0)..HEAD --oneline` tidak kosong setelah pull.
 
 ### [2026-06-XX] INFO — Setup AGENT_LOG.md sebagai kanal komunikasi resmi
 - **Pelaku:** Human + Claude
