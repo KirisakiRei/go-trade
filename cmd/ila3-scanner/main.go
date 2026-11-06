@@ -252,6 +252,9 @@ func main() {
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
 	if isMarketClosed(utcDay, utcHour) {
+		if len(messages) > 0 {
+			fmt.Println(strings.Join(messages, "\n\n---\n\n"))
+		}
 		return
 	}
 
@@ -310,6 +313,8 @@ func main() {
 					equity := 98500.0 // Default fallback cTrader equity
 					if acc != nil && acc.Equity > 0 {
 						equity = acc.Equity
+					} else if acc != nil && acc.Balance > 0 {
+						equity = acc.Balance
 					}
 					riskDollars := equity * 0.005 // strict 0.5% live equity risk
 					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
