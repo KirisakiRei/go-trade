@@ -324,7 +324,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ build+vet+test |
+| 2026-11-06 | `716cac8` | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ build+vet+test |
 | 2026-11-06 | `643e108` | Hermes | Clarify chronological transition from multi-fvg draft to strict latest-fvg | ✅ |
 | 2026-11-06 | `3e5615d` | Hermes | Strictly lock evaluation to latest active unmitigated FVG + separate bubbles | ✅ build+vet+test |
 | 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
