@@ -72,11 +72,11 @@ func (m *MultiBrokerManager) ExecuteOrder(ctx context.Context, req OrderRequest)
 	var errs []string
 
 	for _, b := range m.brokers {
-		// Calculate dynamic 1% live equity risk specifically for THIS broker
+		// Calculate dynamic 0.5% live equity risk specifically for THIS broker
 		acc, err := b.GetAccountInfo(ctx)
 		lot := req.LotSize
 		if err == nil && acc != nil && acc.Equity > 0 {
-			riskDollars := acc.Equity * 0.01 // strict 1.0%
+			riskDollars := acc.Equity * 0.005 // strict 0.5% live equity risk
 			slDist := req.OpenPrice - req.StopLoss
 			if slDist < 0 {
 				slDist = -slDist

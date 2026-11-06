@@ -153,6 +153,40 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] FITUR & RISK MANAGEMENT — 0.5% Live Equity Risk, TP Range 1:2.0-2.3 (Opsi A: DOL-Bounded), Trade Management WIB (1 Win Stop / Max 2 Trades)
+- **Pelaku:** Hermes
+- **Tipe:** FITUR
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Opsi A: DOL-Bounded Clamping (TP Rentang 1:2.00 s.d. 1:2.30 R:R):**
+    - Diimplementasikan di `pkg/ila/evaluator.go`.
+    - Skenario 1 (Jarak DOL Jauh / R:R >= 2.30): TP di-cap tepat pada 1:2.30 R:R demi mencegah greed penalty.
+    - Skenario 2 (Jarak DOL di Rentang 2.00 - 2.30): TP ditaruh tepat pada garis DOL riil pasar.
+    - Skenario 3 (Jarak DOL Sempit / DOL Breached Duluan): TP dikunci di batas dasar 1:2.00 R:R.
+    - Presisi desimal harga: 5 desimal untuk Forex (EURUSD), 2 desimal untuk Gold (XAUUSD) & Indeks (USTEC).
+  - **Trade Management Harian (WIB / Asia/Jakarta):**
+    - Diimplementasikan di `internal/repository/position_repository.go` (`GetDailyTradeStatusWIB`), `internal/service/execution_service.go`, dan `cmd/scanner/main.go`.
+    - Dihitung per hari kalender WIB (00:00:00 - 23:59:59 WIB / UTC+7).
+    - Rule 1: Trade 1 WIN (+R) ➡️ STOP trading hari itu (mengamankan profit harian).
+    - Rule 2: Trade 1 LOSS (-R) ➡️ Kesempatan Trade ke-2 dibuka di hari yang sama.
+    - Rule 3: Trade 2 selesai (WIN / LOSS) ➡️ STOP trading (kuota 2 trade selesai, max kerugian terkontrol -1.0%).
+    - Scanner Telegram tetap berjalan memantau pasar, tetapi auto-eksekusi dikunci transparan (`DAILY_TRADE_LOCK`).
+  - **Dynamic 0.5% Live Equity Risk:**
+    - Diimplementasikan di `pkg/risk/calculator.go`, `pkg/broker/multi_broker.go`, `internal/service/execution_service.go`, dan `cmd/scanner/main.go`.
+    - Risiko per trade diturunkan dari 1.0% ke 0.5% dari live equity riil broker ($50 pada akun $10k, $500 pada akun $100k).
+  - **Dokumentasi & Pengujian:**
+    - Update `docs/04_RISK_MANAGEMENT_AND_POLICIES.md` & `docs/02_ILA_2.0_RULES_AND_WORKFLOW.md`.
+    - Update unit test di `pkg/ila/evaluator_test.go` & `pkg/risk/calculator_test.go` (100% PASS).
+- **File Terdampak:**
+  - `pkg/ila/evaluator.go`, `pkg/ila/evaluator_test.go`
+  - `pkg/risk/calculator.go`, `pkg/risk/calculator_test.go`
+  - `pkg/broker/multi_broker.go`
+  - `internal/repository/interfaces.go`, `internal/repository/position_repository.go`
+  - `internal/service/execution_service.go`
+  - `cmd/scanner/main.go`
+  - `docs/04_RISK_MANAGEMENT_AND_POLICIES.md`, `docs/02_ILA_2.0_RULES_AND_WORKFLOW.md`, `docs/AGENT_LOG.md`
+- **Catatan:** Seluruh binary (`ila-cli`, `ila-scanner`, `ila-server`) telah di-recompile dan live daemon telah di-restart.
+
 ### [2026-11-06] REVIEW & KONFIRMASI — Verifikasi audit perbaikan jalur eksekusi & risk engine
 - **Pelaku:** Hermes
 - **Tipe:** REVIEW
@@ -183,6 +217,8 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
+| 2026-11-06 | *(pending)* | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |
+| 2026-11-06 | `2833de1` | Hermes | Konfirmasi review & verifikasi audit perbaikan jalur eksekusi & risk | ✅ |
 | 2026-11-06 | `0c4a184` | Human + Claude | Audit bug: fix drawdown ILA, root cause nyata, SL floor, risk gate, rollover, vet (7 file) | ✅ build+vet+test |
 | 2026-11-06 | `d73ca25` | Human + Claude | Penanda Sinkronisasi + tag `sync/2026-11-06` | ✅ |
 | 2026-11-06 | `4074754` | Human + Claude | Kanal AGENT_LOG 2 arah + link manifest | ✅ |
@@ -196,13 +232,13 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | # | Temuan | Lokasi | Dampak | Keputusan Human |
 |---|---|---|---|---|
-| 1 | Konflik risiko: dokumen 1.0% vs kode 0.75% di scanner | `docs/04...:5`, `docs/06...:63` vs `cmd/scanner/main.go:31` | Konstanta scanner **tidak dipakai** untuk sizing (lot dari equity riil = 1.0%). Tinggal rapikan dokumen/konstanta. | ❓ **BELUM** (cosmetic) |
+| 1 | Konflik risiko: dokumen 1.0% vs kode 0.75% di scanner | `docs/04...:5`, `docs/06...:63` vs `cmd/scanner/main.go:31` | ✅ **DIPERBAIKI** — Risiko diselaraskan ke 0.50% live equity di dokumen, scanner, & risk engine | ✅ done |
 | 2 | Structural SL Floor tidak ditegakkan di jalur ILA | `docs/04...:47-52` | ✅ **DIPERBAIKI** — `PreFlightCheck` kini dipanggil di ILA | ✅ done |
 | 3 | PreflightFilter | `docs/06...:17-22` | ✅ **TERVERIFIKASI ADA** & kini dipakai di jalur ILA | ✅ done |
 | 4 | Lot sizing / contract size | `docs/04...:11-26` vs `calcLot` | Konsisten (Gold pip 0.10 / $10, Forex 0.0001 / $10). **Risiko aktual kini divalidasi.** | ✅ done |
 | 5 | Root Cause Taxonomy terisi otomatis | `docs/06...:7-13` vs `evaluation_service.go` | ✅ **DIPERBAIKI** — ILA kini punya taksonomi root cause nyata, bukan konstanta | ✅ done |
 | 6 | Drawdown 2-Strike & Out terbalik (`if req.Force`) | `execution_service.go` | ✅ **DIPERBAIKI** — kini aktif seperti doc 04 | ✅ done |
-| 7 | Konstanta `AccountSize/FullRiskPercent=0.75/HalfRiskPercent=0.35` tidak dipakai | `cmd/scanner/main.go:30-32` | Cosmetic — tidak mempengaruhi sizing. Perlu keputusan dihapus/dipakai. | ❓ **BELUM** |
+| 7 | Konstanta `AccountSize/FullRiskPercent=0.75/HalfRiskPercent=0.35` tidak dipakai | `cmd/scanner/main.go:30-32` | ✅ **DIPERBAIKI** — diganti menjadi `DefaultRiskPercent = 0.50` & `MaxRR = 2.3` | ✅ done |
 
 ---
 

@@ -83,3 +83,20 @@ func TestCalculateLotClampsRiskPercent(t *testing.T) {
 		t.Fatalf("expected clamped risk <= 2%%, got %.3f%%", res.RiskPercentage)
 	}
 }
+
+// Validasi default riskPercent 0.5% (konservatif prop firm).
+func TestCalculateLotDefaultRiskHalfPercent(t *testing.T) {
+	// Equity $10,000, riskPercent <= 0 -> default 0.5% = $50
+	// XAUUSD: Entry 2000.0, SL 1995.0 ($5 move = 50 pips)
+	// 50 pips * $10/pip = $500 per lot. $50 / $500 = 0.10 lot
+	res, err := CalculateLot(10000, 0, 2000.0, 1995.0, 2.0, 2012.0, "XAUUSD")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.LotSize != 0.10 {
+		t.Fatalf("expected 0.10 lot on 0.5%% risk, got %f", res.LotSize)
+	}
+	if res.RiskAmount != 50.0 {
+		t.Fatalf("expected $50 risk amount, got %f", res.RiskAmount)
+	}
+}

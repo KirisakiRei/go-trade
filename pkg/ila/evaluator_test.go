@@ -88,12 +88,13 @@ func TestHTFSweepAndCISD(t *testing.T) {
 	if setup.StopLoss != 4220 {
 		t.Errorf("expected StopLoss=4220 (Candle 5 High), got %.2f", setup.StopLoss)
 	}
-	if setup.TakeProfit != 4150 {
-		t.Errorf("expected TakeProfit=4150, got %.2f", setup.TakeProfit)
+	// Option A Clamping: DOL was 4150 (raw RR = 55/15 = 3.67 >= 2.30), so TP is capped to 1:2.30 RR:
+	// TP = 4205 - (2.30 * 15) = 4170.50
+	if setup.TakeProfit != 4170.50 {
+		t.Errorf("expected TakeProfit=4170.50 (capped at 1:2.30 RR), got %.2f", setup.TakeProfit)
 	}
-	// R:R = (4205 - 4150) / (4220 - 4205) = 55 / 15 = 3.67
-	if setup.RiskReward < 3.5 {
-		t.Errorf("expected R:R ~ 3.67, got %.2f", setup.RiskReward)
+	if setup.RiskReward != 2.30 {
+		t.Errorf("expected R:R=2.30 (capped), got %.2f", setup.RiskReward)
 	}
 	t.Logf("Setup summary: %s", setup.Summary)
 }

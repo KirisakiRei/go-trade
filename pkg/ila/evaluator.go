@@ -570,7 +570,7 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 	setup.EntryPrice = cisd.EntryPrice
 	setup.StopLoss = cisd.ExtremeSL
 
-	// Risk & Reward calculation
+	// Risk & Reward calculation (Opsi A: DOL-Bounded Clamping antara 1:2.0 s.d. 1:2.3 R:R)
 	slDist := math.Abs(setup.EntryPrice - setup.StopLoss)
 
 	// Check if DOL was already breached/passed by the sweep candle or current price
@@ -585,30 +585,57 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 		}
 	}
 
+	targetRR := 2.00
 	if dolBreached {
-		// Rule ILA: Jika DOL/Eksternal sudah jebol duluan, kunci TP ke rasio 1:2 R:R
-		if setup.Bias == "BULLISH" {
-			setup.TakeProfit = setup.EntryPrice + (2.0 * slDist)
-		} else {
-			setup.TakeProfit = setup.EntryPrice - (2.0 * slDist)
-		}
-		setup.RiskReward = 2.00
-		setup.PassedMinRR = true
+		// Rule ILA: Jika DOL/Eksternal sudah jebol duluan, kunci TP ke batas bawah 1:2.00 R:R
+		targetRR = 2.00
 	} else {
-		tpDist := math.Abs(setup.TakeProfit - setup.EntryPrice)
+		rawRR := 0.0
 		if slDist > 0 {
-			setup.RiskReward = math.Round((tpDist/slDist)*100) / 100
+			rawRR = math.Abs(setup.TakeProfit-setup.EntryPrice) / slDist
 		}
-		setup.PassedMinRR = setup.RiskReward >= 2.0
+		if rawRR >= 2.30 {
+			// Skenario 1 (Jarak DOL Jauh / R:R >= 2.3): Cap tepat di 1:2.30 (anti-greed)
+			targetRR = 2.30
+		} else if rawRR >= 2.00 {
+			// Skenario 2 (Jarak DOL di Rentang 2.0 - 2.3): Pakai DOL langsung
+			targetRR = math.Round(rawRR*100) / 100
+		} else {
+			// Skenario 3 (Jarak DOL < 2.0): Kunci di batas dasar 1:2.00
+			targetRR = 2.00
+		}
 	}
+
+	if targetRR == 2.00 || targetRR == 2.30 || dolBreached {
+		if setup.Bias == "BULLISH" {
+			setup.TakeProfit = setup.EntryPrice + (targetRR * slDist)
+		} else {
+			setup.TakeProfit = setup.EntryPrice - (targetRR * slDist)
+		}
+	}
+
+	// Round TakeProfit cleanly sesuai instrumen
+	digits := 2
+	if strings.Contains(symbol, "EUR") || strings.Contains(symbol, "GBP") || strings.Contains(symbol, "AUD") {
+		digits = 5
+	}
+	pow := math.Pow10(digits)
+	setup.TakeProfit = math.Round(setup.TakeProfit*pow) / pow
+
+	setup.RiskReward = targetRR
+	setup.PassedMinRR = setup.RiskReward >= 2.00
 
 	actionEmoji := "🟢 BUY"
 	if setup.Bias == "BEARISH" {
 		actionEmoji = "🔴 SELL"
 	}
 
+	fmtPrice := "%.2f"
+	if digits == 5 {
+		fmtPrice = "%.5f"
+	}
 	setup.NextAction = fmt.Sprintf("🎯 SIAP EKSEKUSI %s: Masuk di candle pembuka berikutnya!", actionEmoji)
-	setup.Summary = fmt.Sprintf("💎 SETUP ILA TERKONFIRMASI LENGKAP (%s ➡️ %s):\n• %s\n• %s\n• Level: Entry=%.2f, SL=%.2f, TP=%.2f (R:R 1:%.2f)",
+	setup.Summary = fmt.Sprintf("💎 SETUP ILA TERKONFIRMASI LENGKAP (%s ➡️ %s):\n• %s\n• %s\n• Level: Entry="+fmtPrice+", SL="+fmtPrice+", TP="+fmtPrice+" (R:R 1:%.2f)",
 		htfName, ltfName, sweep.Details, cisd.Details, setup.EntryPrice, setup.StopLoss, setup.TakeProfit, setup.RiskReward)
 
 	return setup

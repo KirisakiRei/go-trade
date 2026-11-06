@@ -1,12 +1,17 @@
 # 04. KEBIJAKAN MANAJEMEN RISIKO & PROTOKOL EKSEKUSI (POLICIES)
 
-## 1. Dynamic 1.0% Live Equity Lot Sizing
+## 1. Dynamic 0.5% Live Equity Lot Sizing
 
-Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **1.0% dari live equity** akun broker saat sinyal tervalidasi:
+Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **0.5% dari live equity** akun broker saat sinyal tervalidasi:
 
-$$\text{Risk Dollars} = \text{Live Equity} \times 0.01$$
+$$\text{Risk Dollars} = \text{Live Equity} \times 0.005$$
 
 $$\text{Lot Size} = \frac{\text{Risk Dollars}}{\text{Jarak SL} \times \text{Contract Size}}$$
+
+### Keunggulan Parameter 0.5% untuk Prop Firm:
+* Akun $10.000 (Match-Trader): Risiko per trade = **$50.00**.
+* Akun $100.000 (cTrader): Risiko per trade = **$500.00**.
+* Maksimal drawdown harian jika 2x SL berturut-turut terkunci rapat di **-1.0%** (jauh di bawah batas Max Daily Loss 5.0% prop firm).
 
 ### Parameter Spesifikasi Kontrak Simbol:
 1. **XAU/USD (Gold):**
@@ -27,20 +32,35 @@ $$\text{Lot Size} = \frac{\text{Risk Dollars}}{\text{Jarak SL} \times \text{Cont
 
 ---
 
-## 2. Quality Gate Rasio Risk-to-Reward (Minimal 1:2.0)
+## 2. Quality Gate Rentang Rasio Risk-to-Reward (1:2.0 s.d. 1:2.3 — Opsi A)
 
-* Sistem menolak secara otomatis (*Quality Gate Refusal*) setiap setup yang memiliki rasio Risk to Reward di bawah **1:2.00**.
-* Jika jarak TP ke entry lebih kecil dari $2 \times$ jarak SL, order dilarang dibuka.
-* **Kecualian DOL Breached:** Jika target eksternal likuiditas (DOL) sudah tertembus lebih dulu oleh lonjakan candle sweep HTF, titik Take Profit otomatis diproyeksikan mengunci rasio **tepat 1:2.00 R:R**.
+Sistem menggunakan **Opsi A: DOL-Bounded Clamping** untuk mengunci titik Take Profit di rentang optimal **1:2.00 s.d. 1:2.30 R:R**:
+
+* **Skenario 1 (Jarak DOL Jauh / R:R $\ge$ 2.30):**
+  * Titik Take Profit **di-CAP (dibatasi) tepat pada 1:2.30 R:R** demi mencegah *greed penalty* (harga berbalik setelah terbang +2R).
+* **Skenario 2 (Jarak DOL di Rentang 2.00 s.d. 2.30):**
+  * Titik Take Profit diletakkan **tepat pada garis DOL** (misal 1:2.15 R:R), menyelaraskan target dengan tarikan likuiditas riil pasar.
+* **Skenario 3 (Jarak DOL Sempit / DOL Breached Duluan):**
+  * Jika target DOL sudah tertembus saat sweep HTF atau jaraknya $< 2.00$, titik Take Profit otomatis **dikunci di batas dasar 1:2.00 R:R**.
 
 ---
 
-## 3. Proteksi Drawdown Harian (2 Strike & Out Rule)
+## 3. Trade Management Harian (WIB / Jam Jakarta): 1 Win = Stop, Max 2 Trades
 
-Demi mengamankan batas maksimal kerugian harian prop firm (**5.0% Max Daily Loss**):
-* Jika akun mengalami **2 kali Stop Loss dalam 1 hari kalender UTC**, sistem mengaktifkan status **`DRAWDOWN_LOCK`**.
-* Seluruh auto-eksekusi order baru hari itu seketika dikunci rapat.
-* Sistem dilarang diam saat penguncian aktif: bot **wajib mengirimkan notifikasi transparansi ke Telegram** bahwa eksekusi tertahan oleh batas proteksi harian.
+Untuk menegakkan kedisiplinan dan menjaga konsistensi prop firm:
+* **Zona Waktu:** Dihitung berdasarkan kalender **WIB (Asia/Jakarta / UTC+7)** dari 00:00:00 hingga 23:59:59 WIB.
+* **Maksimal Trade:** **2 kali per hari**.
+* **Aturan Keputusan State Machine:**
+  1. **Trade 1 WIN (+2.0R s/d +2.3R = +1.0% s/d +1.15%):**
+     * ➡️ **SELESAI (STOP TRADING)** untuk hari itu. Amankan profit harian!
+  2. **Trade 1 LOSS (-1.0R = -0.5%):**
+     * ➡️ Sistem membuka kesempatan untuk **Trade ke-2** di hari yang sama.
+     * Jika Trade 2 **WIN (+2.0R = +1.0%)** ➡️ Hari berakhir dengan net profit +0.5%. Eksekusi ditutup.
+     * Jika Trade 2 **LOSS (-1.0R = -0.5%)** ➡️ Kuota 2 trade habis (**STOP TRADING**). Hari berakhir dengan risiko terkontrol maksimal -1.0%.
+* **Transparansi Notifikasi:**
+  * Scanner Telegram **tetap memantau pasar** dan mengirim update radar ILA, tetapi auto-eksekusi order dikunci dengan keterangan transparan:
+    * `🎯 [EKSEKUSI DIKUNCI] Target harian tercapai (1x WIN). Profit diamankan!`
+    * `🛑 [EKSEKUSI DIKUNCI] Jatah trade harian habis (Max 2 Trades). Kuota selesai!`
 
 ---
 

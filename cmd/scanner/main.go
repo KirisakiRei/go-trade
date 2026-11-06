@@ -28,9 +28,9 @@ const (
 	DBPath              = "/opt/data/ila-engine/ila.db"
 	StateFilePath       = "/opt/data/ila-engine/monitor_state.json"
 	AccountSize         = 10000.0
-	FullRiskPercent     = 0.75
-	HalfRiskPercent     = 0.35
+	DefaultRiskPercent  = 0.50
 	MinRR               = 2.0
+	MaxRR               = 2.3
 	EnableBBMAMonitor   = false // User instructed to disable BBMA monitoring
 	EnableBBMAExecution = false // User instructed to disable BBMA auto-execution
 )
@@ -601,15 +601,13 @@ func main() {
 		}
 	}
 
-	// 3. Check 2 Strike & Out Check (Maksimal 2x SL per hari untuk eksekusi riil)
-	today := time.Now().UTC().Format("2006-01-02")
-	var lossCount int64
-	// Hanya hitung posisi yang benar-benar dibuka dan ditutup pada hari ini (created_at >= today)
-	db.Model(&model.Position{}).
-		Where("created_at >= ? AND closed_at >= ? AND (status = 'CLOSED_SL' OR profit_loss < 0)", today, today).
-		Count(&lossCount)
-
-	isDrawdownLocked := false // Izinkan eksekusi ILA lanjut untuk tes/live per instruksi user
+	// 3. Trade Management Harian (WIB / Jam Jakarta): 1 Win = Stop, Max 2 Trades, 0.5% Risk
+	dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(ctx, time.Now())
+	isTradeLocked := dailyStatus != nil && !dailyStatus.CanTrade
+	tradeLockReason := ""
+	if isTradeLocked {
+		tradeLockReason = dailyStatus.LockReason
+	}
 
 	// 4. Load State & Analyze Pairs
 	state := loadState()
@@ -705,12 +703,12 @@ func main() {
 						dirEmoji = "🔴 SELL"
 					}
 
-					if isDrawdownLocked {
-						if prevILA.LastStatus != "DRAWDOWN_LOCK" || prevILA.LastBreakTime != breakTimeStr {
-							messages = append(messages, fmt.Sprintf("⚠️ **[EKSEKUSI ILA DIKUNCI] %s %s • %s**\n• Mode: ILA (%s ➡️ %s) Siap Entry.\n• **Alasan Tidak Eksekusi:** Batas proteksi harian (Maksimal 2x SL tercapai hari ini) demi menjaga batas aman 5%% prop firm!",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF))
+					if isTradeLocked {
+						if prevILA.LastStatus != "DAILY_TRADE_LOCK" || prevILA.LastBreakTime != breakTimeStr {
+							messages = append(messages, fmt.Sprintf("⚠️ **[EKSEKUSI ILA DIKUNCI] %s %s • %s**\n• Mode: ILA (%s ➡️ %s) Siap Entry.\n• **Alasan Tidak Eksekusi:** %s",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, tradeLockReason))
 							prevILA.LastBreakTime = breakTimeStr
-							prevILA.LastStatus = "DRAWDOWN_LOCK"
+							prevILA.LastStatus = "DAILY_TRADE_LOCK"
 							prevILA.LastHTFStatus = setup.Status
 							state.ILAPairs[ilaKey] = prevILA
 						}
@@ -738,7 +736,7 @@ func main() {
 					sl := setup.StopLoss
 					tp := setup.TakeProfit
 
-					riskPercent := 1.00 // Strictly dynamic 1% live equity risk
+					riskPercent := 0.50 // Strictly dynamic 0.5% live equity risk
 					equity := 10000.0 // Default fallback equity
 					acc, err := tradeBroker.GetAccountInfo(ctx)
 					if err == nil && acc != nil && acc.Equity > 0 {
@@ -791,7 +789,7 @@ func main() {
   2. IC Markets cTrader (#10131354)
 • **Strategi:** ILA (%s ➡️ %s) | **Tiket:** `+"`%s`"+`
 • **Entry:** `+"`%s`"+` | **SL:** `+"`%s`"+` | **TP:** `+"`%s`"+`
-• **R:R:** `+"`1:%.2f`"+` | **Risiko:** 1.0%% per Akun
+• **R:R:** `+"`1:%.2f`"+` | **Risiko:** 0.50%% per Akun
 ⚡ *Posisi aktif serentak di Match-Trader & cTrader dengan SL/TP otomatis!*`,
 							symEmoji, symName, dirEmoji,
 							ep.HTF, ep.LTF, orderRes.TicketNumber,

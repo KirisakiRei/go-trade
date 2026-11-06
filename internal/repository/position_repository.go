@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"ila-engine/internal/dto"
@@ -100,4 +101,88 @@ func (r *positionRepository) CountTodayLosses(ctx context.Context) (int64, error
 		Where("closed_at >= ? AND (status = ? OR profit_loss < 0)", todayStart, "CLOSED_SL").
 		Count(&count).Error
 	return count, err
+}
+
+// GetDailyTradeStatusWIB evaluates daily trade quota based on Jakarta Time (WIB / UTC+7):
+// Rules:
+// 1. Max 2 trades per calendar day (WIB).
+// 2. If Trade 1 is WIN (CLOSED_TP or profit_loss > 0) -> STOP trading for the day.
+// 3. If Trade 1 is LOSS -> Allow Trade 2.
+// 4. If Trade 2 is completed (WIN or LOSS) -> STOP trading (quota 2 trades reached).
+// 5. If any position is currently OPEN -> Lock new trades.
+func (r *positionRepository) GetDailyTradeStatusWIB(ctx context.Context, now time.Time) (*DailyTradeStatus, error) {
+	loc := time.FixedZone("WIB", 7*3600)
+	nowWIB := now.In(loc)
+	startWIB := time.Date(nowWIB.Year(), nowWIB.Month(), nowWIB.Day(), 0, 0, 0, 0, loc).UTC()
+	endWIB := startWIB.Add(24 * time.Hour)
+	dateStr := nowWIB.Format("2006-01-02")
+
+	// 1. Cek semua posisi terbuka saat ini di database
+	var allOpen []model.Position
+	if err := r.db.WithContext(ctx).Model(&model.Position{}).Where("status = ?", "OPEN").Find(&allOpen).Error; err != nil {
+		return nil, err
+	}
+	if len(allOpen) > 0 {
+		return &DailyTradeStatus{
+			DateWIB:    dateStr,
+			OpenTrades: len(allOpen),
+			CanTrade:   false,
+			LockReason: fmt.Sprintf("Ada posisi aktif (%s %s) yang sedang berjalan di pasar.", allOpen[0].Symbol, allOpen[0].Direction),
+		}, nil
+	}
+
+	// 2. Ambil semua posisi yang dibuka pada hari ini (WIB window)
+	var todayPositions []model.Position
+	if err := r.db.WithContext(ctx).Model(&model.Position{}).
+		Where("opened_at >= ? AND opened_at < ?", startWIB, endWIB).
+		Find(&todayPositions).Error; err != nil {
+		return nil, err
+	}
+
+	totalTrades := len(todayPositions)
+	winTrades := 0
+	lossTrades := 0
+
+	for _, p := range todayPositions {
+		if p.Status == "CLOSED_TP" || p.ProfitLoss > 0 {
+			winTrades++
+		} else if p.Status == "CLOSED_SL" || p.ProfitLoss < 0 {
+			lossTrades++
+		}
+	}
+
+	res := &DailyTradeStatus{
+		DateWIB:       dateStr,
+		TotalTrades:   totalTrades,
+		WinningTrades: winTrades,
+		LosingTrades:  lossTrades,
+		OpenTrades:    0,
+	}
+
+	// Evaluasi aturan harian:
+	// Rule 1: Jika sudah 1x WIN -> Selesai / Kunci eksekusi
+	if winTrades >= 1 {
+		res.CanTrade = false
+		res.LockReason = fmt.Sprintf("🎯 TARGET HARIAN TERCAPAI: Hari ini (%s WIB) sudah mencatat kemenangan (%d WIN). Eksekusi ditutup untuk mengamankan profit harian!", dateStr, winTrades)
+		return res, nil
+	}
+
+	// Rule 2: Jika sudah 2 trade (apapun hasilnya) -> Jatah habis
+	if totalTrades >= 2 {
+		res.CanTrade = false
+		res.LockReason = fmt.Sprintf("🛑 JATAH TRADE HARIAN HABIS (Max 2 Trades / 2-Strike): Kuota 2 trade harian (%s WIB) telah tercapai (%d Kalah). Eksekusi dikunci demi menjaga batas drawdown prop firm!", dateStr, lossTrades)
+		return res, nil
+	}
+
+	// Rule 3: Jika trade 1 kalah -> Buka kesempatan trade ke-2
+	if totalTrades == 1 && lossTrades == 1 {
+		res.CanTrade = true
+		res.LockReason = "" // Kesempatan trade ke-2 diizinkan
+		return res, nil
+	}
+
+	// Rule 4: Belum ada trade hari ini -> Buka kesempatan trade ke-1
+	res.CanTrade = true
+	res.LockReason = ""
+	return res, nil
 }
