@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `a41c167`
-> **Tag titik sinkron:** `sync/2026-11-06-market-gate`
+> **Commit terakhir saat log ini ditulis:** `ae6ebb6`
+> **Tag titik sinkron:** `sync/2026-11-06-fix-evaluator-symbols`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -286,7 +286,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | *(pending)* | Hermes | Fix symbol mapping bug (USTEC/EURUSD) & multi-candle sweep evaluator | ✅ build+vet+test |
+| 2026-11-06 | `ae6ebb6` | Hermes | Fix symbol mapping bug (USTEC/EURUSD) & multi-candle sweep evaluator | ✅ build+vet+test |
 | 2026-11-06 | `b26a5b9` | Hermes | Konfirmasi review market-hours gate & mode notif entry manual | ✅ |
 | 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
 | 2026-11-06 | `102ae00` | Hermes | Update sync checkpoint to sync/2026-11-06-risk-mgmt | ✅ |
