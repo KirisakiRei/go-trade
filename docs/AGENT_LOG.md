@@ -183,6 +183,27 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] ARSITEKTUR DUAL-BROKER DEDIKASI — ILA 2.0 di Match-Trader (#1089632) & ILA 3.0 di cTrader (#10131354)
+- **Pelaku:** Hermes
+- **Tipe:** FITUR
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Pemisahan Akun Eksekusi (Isolasi Penuh Tanpa Saling Ganggu):**
+    - **ILA 2.0 (`ila-engine` port 8080):** Dikonfigurasi murni mengeksekusi akun **Match-Trader Demo (#1089632)** dengan disiplin prop firm ketat (0.5% risk, R:R 1:2.0-2.3 Opsi A, kuota harian WIB). cTrader dilepas dari engine ILA 2.0.
+    - **ILA 3.0 (`ila3-engine` port 8082):** Dikonfigurasi murni mengeksekusi akun **IC Markets cTrader (#10131354)** melalui Open API Protobuf TLS.
+  - **Implementasi Core ILA 3.0 Scanner (`cmd/ila3-scanner`):**
+    - Memantau 3 instrumen (XAUUSD, EURUSD, USTEC) dalam mode New Day (4H ➡️ 1H ➡️ 5m) dan New Week (D1 ➡️ 4H ➡️ 15m).
+    - Memproses evaluasi makro komprehensif: Quarterly Theory (QT), Key Levels ERL/IRL, Cross-TF validation, Waypoint FVG filter, SSMT correlation (XAUUSD vs XAGUSD, EURUSD vs GBPUSD, USTEC vs US500), dan StDev Fibonacci checkpoints (-1.0, -2.0 s.d. -2.5 partial TP, -3.5 s.d. -4.0 final target).
+    - Auto-eksekusi cTrader dengan dynamic 0.5% live equity sizing ($492.50) dan Stop Loss di LTF extreme.
+    - Database lokal independen: `ila3-engine/ila3.db`.
+  - **Penjadwalan Cron Terisolasi:**
+    - Cron `3bb5433dac8a` (setiap 15m): Menjalankan `scan_propfirm.py` ➡️ ILA 2.0 Match-Trader.
+    - Cron `93fc06a1b574` (setiap 15m): Menjalankan `scan_ila3.py` ➡️ ILA 3.0 cTrader.
+    - Notifikasi kedua engine dikirimkan per bubble terpisah via `hermes send`.
+  - **Verifikasi & Eksekusi Pertama:**
+    - Setup ILA 3.0 pertama terkonfirmasi valid pada XAU/USD (Mode New Week D1 ➡️ 4H ➡️ 15m, ENTRY 1 REVERSAL).
+    - Berhasil dieksekusi real ke cTrader: **Tiket `#693200601` XAUUSD BUY 0.32 Lot** (Entry 4070.11, SL 4053.91, TP 4146.99, Nested R:R 1:4.75).
+
 ### [2026-11-06] PERBAIKAN ILA 2.0 — Kunci Mutlak FVG Aktif Terbaru (Anti-Mundur ke FVG Usang) & Pemisahan Bubble Notifikasi Telegram
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN
@@ -303,8 +324,9 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | `ae6ebb6` | Hermes | Fix symbol mapping bug (USTEC/EURUSD) & multi-candle sweep evaluator | ✅ build+vet+test |
-| 2026-11-06 | `b26a5b9` | Hermes | Konfirmasi review market-hours gate & mode notif entry manual | ✅ |
+| 2026-11-06 | *(pending)* | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ build+vet+test |
+| 2026-11-06 | `643e108` | Hermes | Clarify chronological transition from multi-fvg draft to strict latest-fvg | ✅ |
+| 2026-11-06 | `3e5615d` | Hermes | Strictly lock evaluation to latest active unmitigated FVG + separate bubbles | ✅ build+vet+test |
 | 2026-11-06 | `a41c167` | Human + Claude | Market-hours gate + wording notif entry-manual | ✅ build+vet+test |
 | 2026-11-06 | `102ae00` | Hermes | Update sync checkpoint to sync/2026-11-06-risk-mgmt | ✅ |
 | 2026-11-06 | `0183e5d` | Hermes | Fitur Risk: 0.5% risk, TP 1:2.0-2.3 (Opsi A), Trade Mgmt WIB 1-Win/Max-2 | ✅ build+vet+test |

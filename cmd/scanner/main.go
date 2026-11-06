@@ -448,10 +448,9 @@ func main() {
 	feedProvider := marketfeed.NewMultiFeedProvider()
 	evalService := service.NewEvaluationService(evalRepo, positionRepo, feedProvider)
 
-	// Inisialisasi Dual-Broker (Match-Trader $10k + IC Markets cTrader)
+	// Inisialisasi Broker: Match-Trader (#1089632) khusus ILA 2.0
 	mtrBroker := broker.NewMatchTraderBroker("")
-	cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
-	var tradeBroker broker.Broker = broker.NewMultiBrokerManager(mtrBroker, cTraderBroker)
+	var tradeBroker broker.Broker = mtrBroker
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -489,29 +488,14 @@ func main() {
 			// Posisi sudah resmi tertutup di server broker! Tarik deal detailnya
 			exitPrice := pos.OpenPrice
 			actualPnL := 0.0
-			isDealFound := false
 
-			// 1. Tarik deal penutup dari cTrader
-			if cTraderBroker != nil && cPosID > 0 {
-				deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
-				for _, d := range deals {
-					if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
-						exitPrice = d.ExecutionPrice
-						actualPnL = d.GrossProfit
-						isDealFound = true
-						break
-					}
-				}
-			}
-
-			// 2. Tarik closed position dari Match-Trader jika deal cTrader kosong
-			if !isDealFound && mtrBroker != nil && mtrID != "" {
+			// Tarik closed position dari Match-Trader
+			if mtrBroker != nil && mtrID != "" {
 				closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-24*time.Hour), time.Now())
 				for _, cp := range closedMtr {
-					if cp.ID == mtrID {
+					if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
 						exitPrice = cp.ClosePrice
 						actualPnL = cp.Profit
-						isDealFound = true
 						break
 					}
 				}
@@ -581,8 +565,8 @@ func main() {
 	// 2.2 Process any unnotified evaluations and send to Telegram!
 	unnotified, _ := evalService.GetUnnotifiedEvaluations(ctx)
 	if len(unnotified) > 0 {
-		acc, _ := cTraderBroker.GetAccountInfo(ctx)
-		currBal := 100000.0
+		acc, _ := mtrBroker.GetAccountInfo(ctx)
+		currBal := 10000.0
 		if acc != nil && acc.Balance > 0 {
 			currBal = acc.Balance
 		}
@@ -810,14 +794,12 @@ func main() {
 							Notes:        fmt.Sprintf("Broker: Match-Trader (1089632) | Metode: ILA (%s ➡️ %s) | %s", ep.HTF, ep.LTF, setup.Summary),
 						})
 
-						entryAlert := fmt.Sprintf(`🚀 **[ORDER REAL ILA - DUAL BROKER] %s %s • %s**
-• **Akun Eksekusi:**
-  1. Match-Trader (#1089632)
-  2. IC Markets cTrader (#10131354)
-• **Strategi:** ILA (%s ➡️ %s) | **Tiket:** `+"`%s`"+`
+						entryAlert := fmt.Sprintf(`🚀 **[ORDER REAL ILA 2.0 - MATCH-TRADER] %s %s • %s**
+• **Akun Eksekusi:** Match-Trader Prop (#1089632)
+• **Strategi:** ILA 2.0 (%s ➡️ %s) | **Tiket:** `+"`%s`"+`
 • **Entry:** `+"`%s`"+` | **SL:** `+"`%s`"+` | **TP:** `+"`%s`"+`
-• **R:R:** `+"`1:%.2f`"+` | **Risiko:** 0.50%% per Akun
-⚡ *Posisi aktif serentak di Match-Trader & cTrader dengan SL/TP otomatis!*`,
+• **R:R:** `+"`1:%.2f`"+` | **Risiko:** 0.50%% Live Equity
+⚡ *Posisi aktif di Match-Trader dengan SL/TP otomatis!*`,
 							symEmoji, symName, dirEmoji,
 							ep.HTF, ep.LTF, orderRes.TicketNumber,
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
