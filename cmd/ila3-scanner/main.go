@@ -190,17 +190,21 @@ func main() {
 				}
 
 				hitTP := false
-				if pos.Direction == "BUY" {
-					if exitPrice >= pos.TakeProfit-0.50 {
-						hitTP = true
-					}
-				} else {
-					if exitPrice <= pos.TakeProfit+0.50 {
-						hitTP = true
-					}
-				}
-				if !hitTP && actualPnL > 0 {
+				if actualPnL > 0 {
 					hitTP = true
+				} else if actualPnL < 0 {
+					hitTP = false
+				} else {
+					isForex := strings.Contains(pos.Symbol, "EUR") || strings.Contains(pos.Symbol, "GBP") || strings.Contains(pos.Symbol, "AUD")
+					tol := 0.50
+					if isForex {
+						tol = 0.00050
+					}
+					if pos.Direction == "BUY" {
+						hitTP = exitPrice >= (pos.TakeProfit - tol)
+					} else {
+						hitTP = exitPrice <= (pos.TakeProfit + tol)
+					}
 				}
 
 				status := "CLOSED_SL"

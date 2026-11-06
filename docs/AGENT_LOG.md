@@ -183,6 +183,28 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-06] AUDIT & PERBAIKAN FATAL ILA 3.0 — Fix False TP Alert, Validasi Interaksi MTF Key Level, & SL Floor Terukur
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Audit Bug Notifikasi False TP (`cmd/ila3-scanner/main.go`):**
+    - **Penyebab:** Toleransi TP sebelumnya di-hardcode `0.50` untuk semua instrumen (`exitPrice >= pos.TakeProfit - 0.50`). Untuk EUR/USD, `0.50` setara dengan 5.000 pips! Akibatnya, setiap posisi sell/buy Forex yang kena SL selalu lolos cek harga dan keliru dilaporkan sebagai `HIT TAKE PROFIT 🎯` dengan hasil R:R positif palsu padahal PnL riilnya minus ($-340).
+    - **Perbaikan:** Menjadikan status PnL riil broker sebagai penentu utama (`actualPnL > 0` ➡️ `CLOSED_TP`, `actualPnL < 0` ➡️ `CLOSED_SL` dengan outcome R negatif). Memperbaiki toleransi instrumen: `0.00050` untuk Forex dan `0.50` untuk Emas/Indeks.
+  - **Audit Bug R:R Fantasi 57:1 & SL 1.8 Pip (`pkg/sequence/evaluator.go`):**
+    - **Penyebab:** Engine mengambil Stop Loss murni dari ekstrim 5-menit terdekat tanpa batas struktural (jarak hanya 1.8 pip di Forex) dan memasang TP tunggal langsung ke Swing High Daily yang berjarak 105 pips (`105 / 1.85` = 57:1 R:R). SL 1.8 pip langsung disapu oleh spread broker!
+    - **Perbaikan:** 
+      1. Menegakkan **SL Floor Struktural Minimal**: Minimal 15 pips di Forex dan $4.00 di Emas menggunakan ekstrim MTF Key Level atau batas spread aman.
+      2. Mengarahkan Take Profit eksekusi utama ke **ICT Standard Deviation Level -2.0 s.d. -2.5 (Zona Kritis / TP 1)** sesuai Bagian 12, 14, dan 16 Dokumen ILA 3.0, dengan batas R:R terukur (1:2.5 s.d. 1:4.5). Target makro HTF tetap dicatat di info `NestedExecution`.
+  - **Validasi Interaksi MTF Key Level (Bagian 8 & 10 Dokumen ILA 3.0):**
+    - Engine sebelumnya langsung melompat ke LTF CISD tanpa memverifikasi apakah harga di MTF sudah menguji MTF Key Level ERL.
+    - Kini diwajibkan validasi sentuhan: MTF candle wajib menguji ERL Swing Low (untuk Bullish) atau ERL Swing High (untuk Bearish) sebelum mencari konfirmasi CISD di LTF.
+  - **Hasil Uji & Verifikasi:**
+    - `go build ./...` ➡️ BERSIH (exit 0)
+    - `go vet ./...` ➡️ BERSIH (exit 0)
+    - `go test -v ./pkg/...` ➡️ PASS 100%
+    - Status EURUSD & XAUUSD ILA 3.0 kini rapi di `WAIT_MTF_REVERSAL` menunggu pengujian MTF ERL riil, tidak ada lagi order prematur dengan SL tipis!
+
 ### [2026-11-06] INTEGRASI REPO TUNGGAL — Penyatuan ILA 3.0 ke dalam Repo go-trade (Single Project, Multi-Binary)
 - **Pelaku:** Hermes
 - **Tipe:** FITUR
@@ -350,8 +372,9 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-06 | `59b8737` | Hermes | Integrate ILA 3.0 packages & binaries into go-trade repo (Single Project) | ✅ build+vet+test |
-| 2026-11-06 | `2c2debd` | Hermes | Dedicated Broker: ILA 2.0 (Match-Trader) & ILA 3.0 (cTrader) + live execution | ✅ |
+| 2026-11-06 | *(pending)* | Hermes | Fix ILA 3.0 false TP alert bug, MTF ERL touch validation, & realistic StDev TP | ✅ build+vet+test |
+| 2026-11-06 | `a22b247` | Hermes | Flush messages on market close and add equity balance fallback | ✅ |
+| 2026-11-06 | `9a93610` | Hermes | Update checkpoint to sync/2026-11-06-ila3-integrated | ✅ |
 | 2026-11-06 | `716cac8` | Hermes | Isolate ILA 2.0 to Match-Trader only and document ILA 3.0 cTrader integration | ✅ |
 | 2026-11-06 | `643e108` | Hermes | Clarify chronological transition from multi-fvg draft to strict latest-fvg | ✅ |
 | 2026-11-06 | `3e5615d` | Hermes | Strictly lock evaluation to latest active unmitigated FVG + separate bubbles | ✅ build+vet+test |

@@ -3,6 +3,7 @@ package sequence
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"ila-engine/pkg/indicators"
@@ -113,11 +114,21 @@ func (e *Evaluator) EvaluateSequence(
 	}
 
 	// 3. Find MTF Key Level (Entry 1 location: MTF ERL Reversal)
+	// Bias BULLISH -> Reversal dari MTF Swing Low
+	// Bias BEARISH -> Reversal dari MTF Swing High
 	mtfERLs := e.klDetector.FindERLs(mtfCandles)
 	var targetMTFERL *keylevels.ERL
-	if len(mtfERLs) > 0 {
-		targetMTFERL = &mtfERLs[len(mtfERLs)-1]
-		setup.MTFKeyLevel = targetMTFERL
+	for i := len(mtfERLs) - 1; i >= 0; i-- {
+		merl := &mtfERLs[i]
+		if setup.Bias == "BULLISH" && merl.Type == keylevels.TypeERLSwingLow {
+			targetMTFERL = merl
+			setup.MTFKeyLevel = targetMTFERL
+			break
+		} else if setup.Bias == "BEARISH" && merl.Type == keylevels.TypeERLSwingHigh {
+			targetMTFERL = merl
+			setup.MTFKeyLevel = targetMTFERL
+			break
+		}
 	}
 
 	// Cross-Timeframe Validation (Section 6): Check if HTF Key Level has structural trace in MTF
@@ -128,6 +139,30 @@ func (e *Evaluator) EvaluateSequence(
 				break
 			}
 		}
+	}
+
+	// Validasi Sentuhan MTF Key Level (Section 8 & 10):
+	// Harga di MTF WAJIB menyentuh/menguji level MTF ERL terlebih dahulu sebelum mencari CISD di LTF!
+	latestMTF := mtfCandles[len(mtfCandles)-1]
+	mtfReached := false
+	if targetMTFERL != nil {
+		if setup.Bias == "BULLISH" && latestMTF.Low <= targetMTFERL.Price {
+			mtfReached = true
+		} else if setup.Bias == "BEARISH" && latestMTF.High >= targetMTFERL.Price {
+			mtfReached = true
+		}
+	}
+
+	if targetMTFERL == nil || !mtfReached {
+		setup.State = StateWaitingMTFReversal
+		if targetMTFERL != nil {
+			setup.Summary = fmt.Sprintf("Menunggu harga di MTF (%s) menyentuh level %s (%.5f).", mtfName, targetMTFERL.Type, targetMTFERL.Price)
+			setup.NextAction = fmt.Sprintf("⏳ Tunggu interaksi harga di MTF (%s) dengan Key Level ERL %.5f.", mtfName, targetMTFERL.Price)
+		} else {
+			setup.Summary = fmt.Sprintf("Belum ada MTF (%s) Key Level yang selaras dengan bias %s.", mtfName, setup.Bias)
+			setup.NextAction = fmt.Sprintf("⏳ Tunggu pembentukan Swing High/Low di MTF (%s).", mtfName)
+		}
+		return setup
 	}
 
 	// Determine HTF Target Level (ERL/IRL)
@@ -160,23 +195,35 @@ func (e *Evaluator) EvaluateSequence(
 		setup.State = StateReadyEntry1
 		setup.SetupType = SetupEntry1Reversal
 		setup.EntryPrice = cisd1.EntryPrice
-		setup.StopLoss = cisd1.ExtremeSL
 
-		// Target rule: ERL start -> can target opposing ERL or IRL
-		if htfTargetPrice > 0 {
-			setup.TakeProfit = htfTargetPrice
-		} else {
-			if setup.Bias == "BULLISH" {
-				setup.TakeProfit = setup.EntryPrice + (2.5 * math.Abs(setup.EntryPrice-setup.StopLoss))
-			} else {
-				setup.TakeProfit = setup.EntryPrice - (2.5 * math.Abs(setup.EntryPrice-setup.StopLoss))
+		// Proteksi SL Struktural Minimal (Anti-Spread Noise):
+		minSLFloor := 0.00150 // Minimal 15 pips untuk Forex
+		if strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD") {
+			minSLFloor = 4.00 // Minimal $4.00 untuk Gold
+		} else if strings.Contains(symbol, "TEC") || strings.Contains(symbol, "NAS") {
+			minSLFloor = 15.0 // Minimal 15 pts untuk Indeks
+		}
+
+		slCandidate := cisd1.ExtremeSL
+		if setup.Bias == "BULLISH" {
+			if targetMTFERL != nil && targetMTFERL.Price < slCandidate {
+				slCandidate = targetMTFERL.Price
 			}
+			if math.Abs(setup.EntryPrice-slCandidate) < minSLFloor {
+				slCandidate = setup.EntryPrice - minSLFloor
+			}
+			setup.StopLoss = slCandidate
+		} else {
+			if targetMTFERL != nil && targetMTFERL.Price > slCandidate {
+				slCandidate = targetMTFERL.Price
+			}
+			if math.Abs(setup.EntryPrice-slCandidate) < minSLFloor {
+				slCandidate = setup.EntryPrice + minSLFloor
+			}
+			setup.StopLoss = slCandidate
 		}
 
 		slDist := math.Abs(setup.EntryPrice - setup.StopLoss)
-		if slDist > 0 {
-			setup.RiskReward = math.Abs(setup.TakeProfit-setup.EntryPrice) / slDist
-		}
 
 		// Draw Standard Deviation Projection immediately
 		dir := stdev.DirectionBullish
@@ -186,15 +233,40 @@ func (e *Evaluator) EvaluateSequence(
 		stdevLevels := e.stdevProj.CalculateProjection(dir, cisd1.ExtremeSL, cisd1.BreakPrice)
 		setup.StDevProjections = &stdevLevels
 
-		// Nested Execution Multi-Timeframe Risk/Reward (Section 12)
+		// Target Eksekusi Terukur (Bagian 12, 14 & 16 Dokumen ILA 3.0):
+		// Target utama eksekusi dipatok pada StDev Level -2.0 s.d. -2.5 (Zona Kritis / TP 1)
+		// dengan batas rasio R:R realistis (1:2.5 s.d. 1:4.5), bukan dilepas mentah 1:57 ke target harian/mingguan!
+		targetTP := stdevLevels.LevelMinus2
+		if setup.Bias == "BULLISH" {
+			rawRR := (targetTP - setup.EntryPrice) / slDist
+			if rawRR < 2.0 {
+				targetTP = setup.EntryPrice + (2.5 * slDist)
+			} else if rawRR > 4.5 {
+				targetTP = setup.EntryPrice + (4.5 * slDist)
+			}
+		} else {
+			rawRR := (setup.EntryPrice - targetTP) / slDist
+			if rawRR < 2.0 {
+				targetTP = setup.EntryPrice - (2.5 * slDist)
+			} else if rawRR > 4.5 {
+				targetTP = setup.EntryPrice - (4.5 * slDist)
+			}
+		}
+		setup.TakeProfit = targetTP
+
+		if slDist > 0 {
+			setup.RiskReward = math.Round((math.Abs(setup.TakeProfit-setup.EntryPrice)/slDist)*100) / 100.0
+		}
+
+		// Nested Execution Multi-Timeframe (Ultra-Macro Reward dicatat di info nested):
 		if htfTargetPrice > 0 && slDist > 0 {
 			setup.NestedExecution = &NestedExecutionInfo{
 				HTFTargetPrice: htfTargetPrice,
 				HTFTargetName:  htfTargetName,
-				LTFSLPrice:     cisd1.ExtremeSL,
+				LTFSLPrice:     setup.StopLoss,
 				RiskDistance:   slDist,
 				RewardDistance: math.Abs(htfTargetPrice - setup.EntryPrice),
-				NestedRR:       math.Abs(htfTargetPrice-setup.EntryPrice) / slDist,
+				NestedRR:       math.Round((math.Abs(htfTargetPrice-setup.EntryPrice)/slDist)*100) / 100.0,
 				CriticalZoneTP: stdevLevels.LevelMinus2,
 				FinalZoneTP:    stdevLevels.LevelMinus3_5,
 			}
@@ -234,22 +306,33 @@ func (e *Evaluator) EvaluateSequence(
 			setup.State = StateReadyEntry2
 			setup.SetupType = SetupEntry2Retrace
 			setup.EntryPrice = cisd2.EntryPrice
-			setup.StopLoss = cisd2.ExtremeSL
+			slCandidate2 := cisd2.ExtremeSL
+			minSLFloor := 0.00150
+			if strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD") {
+				minSLFloor = 4.00
+			} else if strings.Contains(symbol, "TEC") || strings.Contains(symbol, "NAS") {
+				minSLFloor = 15.0
+			}
 
-			if htfTargetPrice > 0 {
-				setup.TakeProfit = htfTargetPrice
-			} else {
-				if setup.Bias == "BULLISH" {
-					setup.TakeProfit = setup.EntryPrice + (2.5 * math.Abs(setup.EntryPrice-setup.StopLoss))
-				} else {
-					setup.TakeProfit = setup.EntryPrice - (2.5 * math.Abs(setup.EntryPrice-setup.StopLoss))
+			if setup.Bias == "BULLISH" {
+				if activeRetraceFVG.Bottom < slCandidate2 {
+					slCandidate2 = activeRetraceFVG.Bottom
 				}
+				if math.Abs(setup.EntryPrice-slCandidate2) < minSLFloor {
+					slCandidate2 = setup.EntryPrice - minSLFloor
+				}
+				setup.StopLoss = slCandidate2
+			} else {
+				if activeRetraceFVG.Top > slCandidate2 {
+					slCandidate2 = activeRetraceFVG.Top
+				}
+				if math.Abs(setup.EntryPrice-slCandidate2) < minSLFloor {
+					slCandidate2 = setup.EntryPrice + minSLFloor
+				}
+				setup.StopLoss = slCandidate2
 			}
 
 			slDist := math.Abs(setup.EntryPrice - setup.StopLoss)
-			if slDist > 0 {
-				setup.RiskReward = math.Abs(setup.TakeProfit-setup.EntryPrice) / slDist
-			}
 
 			dir := stdev.DirectionBullish
 			if setup.Bias == "BEARISH" {
@@ -258,14 +341,36 @@ func (e *Evaluator) EvaluateSequence(
 			stdevLevels := e.stdevProj.CalculateProjection(dir, cisd2.ExtremeSL, cisd2.BreakPrice)
 			setup.StDevProjections = &stdevLevels
 
+			targetTP2 := stdevLevels.LevelMinus2
+			if setup.Bias == "BULLISH" {
+				rawRR := (targetTP2 - setup.EntryPrice) / slDist
+				if rawRR < 2.0 {
+					targetTP2 = setup.EntryPrice + (2.5 * slDist)
+				} else if rawRR > 4.5 {
+					targetTP2 = setup.EntryPrice + (4.5 * slDist)
+				}
+			} else {
+				rawRR := (setup.EntryPrice - targetTP2) / slDist
+				if rawRR < 2.0 {
+					targetTP2 = setup.EntryPrice - (2.5 * slDist)
+				} else if rawRR > 4.5 {
+					targetTP2 = setup.EntryPrice - (4.5 * slDist)
+				}
+			}
+			setup.TakeProfit = targetTP2
+
+			if slDist > 0 {
+				setup.RiskReward = math.Round((math.Abs(setup.TakeProfit-setup.EntryPrice)/slDist)*100) / 100.0
+			}
+
 			if htfTargetPrice > 0 && slDist > 0 {
 				setup.NestedExecution = &NestedExecutionInfo{
 					HTFTargetPrice: htfTargetPrice,
 					HTFTargetName:  htfTargetName,
-					LTFSLPrice:     cisd2.ExtremeSL,
+					LTFSLPrice:     setup.StopLoss,
 					RiskDistance:   slDist,
 					RewardDistance: math.Abs(htfTargetPrice - setup.EntryPrice),
-					NestedRR:       math.Abs(htfTargetPrice-setup.EntryPrice) / slDist,
+					NestedRR:       math.Round((math.Abs(htfTargetPrice-setup.EntryPrice)/slDist)*100) / 100.0,
 					CriticalZoneTP: stdevLevels.LevelMinus2,
 					FinalZoneTP:    stdevLevels.LevelMinus3_5,
 				}
