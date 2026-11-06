@@ -401,49 +401,6 @@ func makeILATable(pairs []ILARowDisplay) string {
 	)
 }
 
-func extractTicketIDs(ticket string) (int64, string) {
-	var cPosID int64
-	var mtrID string
-
-	// Extract cTrader ID (numeric after cTrader ... #\d+)
-	if cIdx := strings.Index(ticket, "cTrader"); cIdx != -1 {
-		sub := ticket[cIdx:]
-		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
-			rest := sub[hashIdx+1:]
-			end := strings.IndexAny(rest, ", )")
-			if end != -1 {
-				rest = rest[:end]
-			}
-			cPosID, _ = strconv.ParseInt(rest, 10, 64)
-		}
-	} else if hashIdx := strings.Index(ticket, "#"); hashIdx != -1 {
-		rest := ticket[hashIdx+1:]
-		end := strings.IndexAny(rest, ", )")
-		if end != -1 {
-			rest = rest[:end]
-		}
-		cPosID, _ = strconv.ParseInt(rest, 10, 64)
-	}
-
-	// Extract Match-Trader ID (alphanumeric after Match-Trader ... #W\w+)
-	if mIdx := strings.Index(ticket, "Match-Trader"); mIdx != -1 {
-		sub := ticket[mIdx:]
-		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
-			rest := sub[hashIdx+1:]
-			end := strings.IndexAny(rest, ", )")
-			if end != -1 {
-				rest = rest[:end]
-			}
-			mtrID = rest
-		}
-	}
-
-	if cPosID == 0 {
-		cPosID, _ = strconv.ParseInt(ticket, 10, 64)
-	}
-	return cPosID, mtrID
-}
-
 func main() {
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
@@ -485,7 +442,7 @@ func main() {
 		}
 
 		for _, pos := range openPositions {
-			cPosID, mtrID := extractTicketIDs(pos.TicketNumber)
+			cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
 			cPosIDStr := strconv.FormatInt(cPosID, 10)
 
 			// Cek apakah posisi masih aktif di salah satu broker

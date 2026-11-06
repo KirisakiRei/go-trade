@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -147,6 +148,50 @@ func (m *MultiBrokerManager) GetOpenPositions(ctx context.Context) ([]PositionIn
 		}
 	}
 	return allPos, nil
+}
+
+// ExtractTicketIDs parses composite multi-broker ticket string into cTrader numeric ID and Match-Trader string ID
+func ExtractTicketIDs(ticket string) (int64, string) {
+	var cPosID int64
+	var mtrID string
+
+	// Extract cTrader ID (numeric after cTrader ... #\d+)
+	if cIdx := strings.Index(ticket, "cTrader"); cIdx != -1 {
+		sub := ticket[cIdx:]
+		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
+			rest := sub[hashIdx+1:]
+			end := strings.IndexAny(rest, ", )")
+			if end != -1 {
+				rest = rest[:end]
+			}
+			cPosID, _ = strconv.ParseInt(rest, 10, 64)
+		}
+	} else if hashIdx := strings.Index(ticket, "#"); hashIdx != -1 {
+		rest := ticket[hashIdx+1:]
+		end := strings.IndexAny(rest, ", )")
+		if end != -1 {
+			rest = rest[:end]
+		}
+		cPosID, _ = strconv.ParseInt(rest, 10, 64)
+	}
+
+	// Extract Match-Trader ID (alphanumeric after Match-Trader ... #W\w+)
+	if mIdx := strings.Index(ticket, "Match-Trader"); mIdx != -1 {
+		sub := ticket[mIdx:]
+		if hashIdx := strings.Index(sub, "#"); hashIdx != -1 {
+			rest := sub[hashIdx+1:]
+			end := strings.IndexAny(rest, ", )")
+			if end != -1 {
+				rest = rest[:end]
+			}
+			mtrID = rest
+		}
+	}
+
+	if cPosID == 0 {
+		cPosID, _ = strconv.ParseInt(ticket, 10, 64)
+	}
+	return cPosID, mtrID
 }
 
 var _ Broker = (*MultiBrokerManager)(nil)

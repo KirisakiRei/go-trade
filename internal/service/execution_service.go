@@ -288,12 +288,12 @@ func (s *executionService) CheckAndManagePositions(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. If connected to a real broker (cTrader), let the broker execute SL/TP natively on server.
+	// 1. If connected to real brokers (cTrader / Match-Trader / MultiBroker), let brokers execute SL/TP natively.
 	// We only reconcile state: if position is closed on broker, update database with REAL broker deal.
-	if strings.Contains(s.broker.Name(), "cTrader") {
+	if strings.Contains(s.broker.Name(), "cTrader") || strings.Contains(s.broker.Name(), "Match-Trader") || strings.Contains(s.broker.Name(), "MultiBroker") {
 		brokerPositions, err := s.broker.GetOpenPositions(ctx)
 		if err != nil {
-			slog.Warn("Failed to fetch open positions from cTrader for reconciliation", "error", err)
+			slog.Warn("Failed to fetch open positions from brokers for reconciliation", "error", err)
 			return nil
 		}
 
@@ -303,47 +303,113 @@ func (s *executionService) CheckAndManagePositions(ctx context.Context) error {
 		}
 
 		for _, pos := range openPositions {
-			// If position is still open on cTrader, DO NOT TOUCH IT! The broker's server SL/TP is guarding it.
+			cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
+			cPosIDStr := strconv.FormatInt(cPosID, 10)
+
+			// If position is still open on any broker, DO NOT TOUCH IT! The broker's server SL/TP is guarding it.
+			isOpen := false
 			if activeBrokerTickets[pos.TicketNumber] {
+				isOpen = true
+			}
+			if cPosID > 0 && activeBrokerTickets[cPosIDStr] {
+				isOpen = true
+			}
+			if mtrID != "" && activeBrokerTickets[mtrID] {
+				isOpen = true
+			}
+			if isOpen {
 				continue
 			}
 
-			// Position has been closed on cTrader! (SL, TP, or manual close in app)
-			slog.Info("🔄 Posisi terdeteksi telah ditutup di cTrader, sinkronisasi deal...", "ticket", pos.TicketNumber)
+			// Position has been closed on broker! (SL, TP, or manual close in app)
+			slog.Info("🔄 Posisi terdeteksi telah ditutup di broker, sinkronisasi deal...", "ticket", pos.TicketNumber)
 
 			exitPrice := pos.OpenPrice
-			pnl := 0.0
-			status := "CLOSED_SL"
-			outcomeR := -1.0
+			actualPnL := 0.0
+			isDealFound := false
 
-			if cb, ok := s.broker.(*broker.CTraderBroker); ok {
-				posID, _ := strconv.ParseInt(pos.TicketNumber, 10, 64)
-				deals, err := cb.GetDealsByPosition(ctx, posID)
+			// Find underlying brokers
+			var cb *broker.CTraderBroker
+			var mb *broker.MatchTraderBroker
+			if multi, ok := s.broker.(*broker.MultiBrokerManager); ok {
+				for _, b := range multi.GetBrokers() {
+					if c, ok := b.(*broker.CTraderBroker); ok {
+						cb = c
+					} else if m, ok := b.(*broker.MatchTraderBroker); ok {
+						mb = m
+					}
+				}
+			} else if c, ok := s.broker.(*broker.CTraderBroker); ok {
+				cb = c
+			} else if m, ok := s.broker.(*broker.MatchTraderBroker); ok {
+				mb = m
+			}
+
+			// 1. Try pulling deals from cTrader
+			if cb != nil && cPosID > 0 {
+				deals, err := cb.GetDealsByPosition(ctx, cPosID)
 				if err == nil && len(deals) > 0 {
 					for _, d := range deals {
-						// Look for the closing deal (opposite side of position)
-						if (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
+						if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
 							exitPrice = d.ExecutionPrice
-							pnl = d.GrossProfit
+							actualPnL = d.GrossProfit
+							isDealFound = true
 							break
 						}
 					}
 				}
 			}
 
-			if pnl > 0 {
+			// 2. Try pulling closed position from Match-Trader
+			if !isDealFound && mb != nil && mtrID != "" {
+				closedMtr, err := mb.GetClosedPositions(ctx, time.Now().Add(-24*time.Hour), time.Now())
+				if err == nil {
+					for _, cp := range closedMtr {
+						if cp.ID == mtrID {
+							exitPrice = cp.ClosePrice
+							actualPnL = cp.Profit
+							isDealFound = true
+							break
+						}
+					}
+				}
+			}
+
+			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
+			tol := 0.50
+			if !isGold {
+				tol = 0.00050
+			}
+
+			hitTP := false
+			if pos.Direction == "BUY" {
+				if exitPrice >= (pos.TakeProfit - tol) {
+					hitTP = true
+				}
+			} else {
+				if exitPrice <= (pos.TakeProfit + tol) {
+					hitTP = true
+				}
+			}
+			if !hitTP && actualPnL > 0 {
+				hitTP = true
+			}
+
+			status := "CLOSED_SL"
+			outcomeR := -1.0
+			if hitTP {
 				status = "CLOSED_TP"
 				outcomeR = pos.RiskReward
 			}
 
-			_ = s.positionRepo.ClosePosition(ctx, pos.TicketNumber, exitPrice, pnl, outcomeR, status, fmt.Sprintf("Ditutup oleh server broker cTrader (%s)", status))
+			_ = s.positionRepo.ClosePosition(ctx, pos.TicketNumber, exitPrice, actualPnL, outcomeR, status, fmt.Sprintf("Ditutup oleh server broker (%s)", status))
 
-			slog.Info("🏁 POSISI CTRADER TERKONFIRMASI TUTUP 🏁",
+			slog.Info("🏁 POSISI BROKER TERKONFIRMASI TUTUP 🏁",
 				"ticket", pos.TicketNumber,
 				"symbol", pos.Symbol,
 				"status", status,
 				"exit_price", exitPrice,
-				"pnl", pnl,
+				"pnl", actualPnL,
 				"outcome_r", outcomeR,
 			)
 		}
