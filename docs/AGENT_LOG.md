@@ -16,8 +16,8 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `0a2f7ca`
-> **Tag titik sinkron:** `sync/2026-11-06-ila3-fixes`
+> **Commit terakhir saat log ini ditulis:** `332cf73`
+> **Tag titik sinkron:** `sync/2026-11-07-friday-gate`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
 
@@ -385,7 +385,7 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
-| 2026-11-07 | *(pending)* | Hermes | Guard Friday market close (Jumat >= 20:00 UTC) di kedua scanner | ✅ build+vet+test |
+| 2026-11-07 | `332cf73` | Hermes | Guard Friday market close (Jumat >= 20:00 UTC) di kedua scanner | ✅ build+vet+test |
 | 2026-11-06 | `eb875e0` | Hermes | Update checkpoint to sync/2026-11-06-ila3-fixes | ✅ |
 | 2026-11-06 | `0a2f7ca` | Hermes | Fix ILA 3.0 false TP alert bug, MTF ERL touch validation, & realistic StDev TP | ✅ build+vet+test |
 | 2026-11-06 | `a22b247` | Hermes | Flush messages on market close and add equity balance fallback | ✅ |
