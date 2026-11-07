@@ -74,6 +74,10 @@ func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
 	if utcDay == time.Saturday || utcDay == time.Sunday {
 		return true
 	}
+	// Jumat malam mulai 20:00 UTC (03:00 WIB Sabtu) menjelang market close & spread melebar
+	if utcDay == time.Friday && utcHour >= 20 {
+		return true
+	}
 	if utcHour >= 22 || utcHour < 1 {
 		return true
 	}

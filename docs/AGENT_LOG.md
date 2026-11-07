@@ -183,6 +183,19 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-07] PERBAIKAN MARKET GATE — Tambah Proteksi Friday Market Close (Jumat >= 20:00 UTC / 03:00 WIB)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Penyempurnaan `isMarketClosed` di `cmd/scanner` & `cmd/ila3-scanner`:**
+    - Sebelumnya, fungsi `isMarketClosed` hanya mengecek `Saturday`, `Sunday`, dan rollover subuh `22:00-01:00 UTC`.
+    - Akibatnya, pada Jumat malam jam 20:46 UTC (14 menit sebelum penutupan pasar akhir pekan saat spread mulai melebar), sistem masih menganggap pasar buka normal dan mengeksekusi order.
+    - Ditambahkan guard: `if utcDay == time.Friday && utcHour >= 20 { return true }` (Jumat mulai jam 20:00 UTC / 03:00 WIB Sabtu otomatis dianggap pasar tutup).
+    - Mencegah eksekusi baru di jam-jam rawan spread melebar jelang penutupan akhir pekan dan menghindari floating gap akhir pekan.
+  - **Verifikasi:**
+    - Unit test PASS 100%. Rebuild `ila-scanner` dan `ila3-scanner`. Saat ini (Sabtu), kedua scanner otomatis early-return (silent, tidak scan & tidak eksekusi).
+
 ### [2026-11-06] AUDIT & PERBAIKAN FATAL ILA 3.0 — Fix False TP Alert, Validasi Interaksi MTF Key Level, & SL Floor Terukur
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN
@@ -372,6 +385,8 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 | Tanggal | Commit | Pelaku | Ringkasan | Diverifikasi? |
 |---|---|---|---|---|
+| 2026-11-07 | *(pending)* | Hermes | Guard Friday market close (Jumat >= 20:00 UTC) di kedua scanner | ✅ build+vet+test |
+| 2026-11-06 | `eb875e0` | Hermes | Update checkpoint to sync/2026-11-06-ila3-fixes | ✅ |
 | 2026-11-06 | `0a2f7ca` | Hermes | Fix ILA 3.0 false TP alert bug, MTF ERL touch validation, & realistic StDev TP | ✅ build+vet+test |
 | 2026-11-06 | `a22b247` | Hermes | Flush messages on market close and add equity balance fallback | ✅ |
 | 2026-11-06 | `9a93610` | Hermes | Update checkpoint to sync/2026-11-06-ila3-integrated | ✅ |
