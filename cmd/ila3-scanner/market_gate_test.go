@@ -1,0 +1,30 @@
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+// Market tutup: Sabtu/Minggu penuh, Jumat >= 21:00 UTC, dan rollover 22:00-01:00 UTC.
+func TestIsMarketClosedILA3(t *testing.T) {
+	cases := []struct {
+		name string
+		day  time.Weekday
+		hour int
+		want bool
+	}{
+		{"Senin pagi", time.Monday, 7, false},
+		{"Jumat sesi New York 20:00 UTC", time.Friday, 20, false},
+		{"Jumat tutup 21:00 UTC", time.Friday, 21, true},
+		{"Sabtu penuh", time.Saturday, 10, true},
+		{"Minggu penuh", time.Sunday, 10, true},
+		{"Rollover 23:00 UTC", time.Tuesday, 23, true},
+		{"Rollover selesai 01:00 UTC", time.Tuesday, 1, false},
+	}
+
+	for _, c := range cases {
+		if got := isMarketClosed(c.day, c.hour); got != c.want {
+			t.Errorf("%s: isMarketClosed(%v, %d) = %v, want %v", c.name, c.day, c.hour, got, c.want)
+		}
+	}
+}

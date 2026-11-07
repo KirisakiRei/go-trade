@@ -14,10 +14,10 @@ import (
 )
 
 type Evaluator struct {
-	klDetector *keylevels.Detector
-	qtCalc     *quarterly.Calculator
+	klDetector  *keylevels.Detector
+	qtCalc      *quarterly.Calculator
 	smtDetector *ssmt.Detector
-	stdevProj  *stdev.Projector
+	stdevProj   *stdev.Projector
 }
 
 func NewEvaluator() *Evaluator {
@@ -26,6 +26,22 @@ func NewEvaluator() *Evaluator {
 		qtCalc:      quarterly.NewCalculator(),
 		smtDetector: ssmt.NewDetector(),
 		stdevProj:   stdev.NewProjector(),
+	}
+}
+
+// minSLFloorFor: jarak SL minimum agar tidak tersapu noise spread, sesuai desimal tiap instrumen.
+// Forex 5 desimal (EURUSD) 15 pip = 0.00150; Forex 3 desimal (USDJPY) 15 pip = 0.150.
+func minSLFloorFor(symbol string) float64 {
+	upper := strings.ToUpper(symbol)
+	switch {
+	case strings.Contains(upper, "XAU") || strings.Contains(upper, "GOLD"):
+		return 4.00
+	case strings.Contains(upper, "TEC") || strings.Contains(upper, "NAS") || strings.Contains(upper, "US100") || strings.Contains(upper, "US500"):
+		return 15.0
+	case strings.Contains(upper, "JPY"):
+		return 0.150
+	default:
+		return 0.00150
 	}
 }
 
@@ -197,12 +213,7 @@ func (e *Evaluator) EvaluateSequence(
 		setup.EntryPrice = cisd1.EntryPrice
 
 		// Proteksi SL Struktural Minimal (Anti-Spread Noise):
-		minSLFloor := 0.00150 // Minimal 15 pips untuk Forex
-		if strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD") {
-			minSLFloor = 4.00 // Minimal $4.00 untuk Gold
-		} else if strings.Contains(symbol, "TEC") || strings.Contains(symbol, "NAS") {
-			minSLFloor = 15.0 // Minimal 15 pts untuk Indeks
-		}
+		minSLFloor := minSLFloorFor(symbol)
 
 		slCandidate := cisd1.ExtremeSL
 		if setup.Bias == "BULLISH" {
@@ -234,8 +245,8 @@ func (e *Evaluator) EvaluateSequence(
 		setup.StDevProjections = &stdevLevels
 
 		// Target Eksekusi Terukur (Bagian 12, 14 & 16 Dokumen ILA 3.0):
-		// Target utama eksekusi dipatok pada StDev Level -2.0 s.d. -2.5 (Zona Kritis / TP 1)
-		// dengan batas rasio R:R realistis (1:2.5 s.d. 1:4.5), bukan dilepas mentah 1:57 ke target harian/mingguan!
+		// Basis awal StDev Level -2.0 (Zona Kritis / TP 1), lalu dijepit ke rentang R:R 1:2.0 s.d. 1:4.5
+		// agar tidak melepas TP ke target harian/mingguan yang menghasilkan R:R fantasi.
 		targetTP := stdevLevels.LevelMinus2
 		if setup.Bias == "BULLISH" {
 			rawRR := (targetTP - setup.EntryPrice) / slDist
@@ -307,12 +318,7 @@ func (e *Evaluator) EvaluateSequence(
 			setup.SetupType = SetupEntry2Retrace
 			setup.EntryPrice = cisd2.EntryPrice
 			slCandidate2 := cisd2.ExtremeSL
-			minSLFloor := 0.00150
-			if strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD") {
-				minSLFloor = 4.00
-			} else if strings.Contains(symbol, "TEC") || strings.Contains(symbol, "NAS") {
-				minSLFloor = 15.0
-			}
+			minSLFloor := minSLFloorFor(symbol)
 
 			if setup.Bias == "BULLISH" {
 				if activeRetraceFVG.Bottom < slCandidate2 {

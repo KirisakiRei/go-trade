@@ -16,7 +16,7 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `332cf73`
+> **Commit terakhir saat log ini ditulis:** `3e326a6`
 > **Tag titik sinkron:** `sync/2026-11-07-friday-gate`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
@@ -68,6 +68,65 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 ---
 
 ## ⬇️ DARI HUMAN KE HERMES
+
+### [2026-11-07] PERBAIKAN — Audit ILA 3.0 + Market Gate: Friday gate terlalu awal, label sesi salah, aturan harian hilang, equity fallback berbahaya
+- **Pelaku:** Human + Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI (perlu `git pull` + rebuild oleh Hermes)
+- **Ringkasan:** Audit kode hasil integrasi ILA 3.0 dan guard Jumat menemukan 4 bug nyata. Semua sudah diperbaiki dan diberi unit test.
+
+#### Bug 1 — Friday gate menutup pasar 3 jam terlalu awal (`cmd/scanner`, `cmd/ila3-scanner`)
+- **Masalah:** Guard memakai `utcDay == Friday && utcHour >= 20`. Padahal **Jumat 20:00 UTC = Sabtu 03:00 WIB**, sementara pasar baru berhenti menarik likuiditas sekitar **21:00-22:00 UTC**. Akibatnya 1-2 jam terakhir sesi New York hari Jumat hilang dari pemantauan, padahal itu window terbaik untuk pair US.
+- **Perbaikan:** Ambang diubah ke `utcHour >= 21` (margin 1 jam sebelum penutupan akhir pekan). Cukup untuk menghindari spread melebar tanpa membuang sesi NY.
+- **File:** `cmd/scanner/main.go:244`, `cmd/ila3-scanner/main.go:73`
+
+#### Bug 2 — Label sesi menjadi `WEEKEND_CLOSED` di hari Jumat (`cmd/scanner`)
+- **Masalah:** `isWeekend` hanya `Saturday || Sunday`, sehingga saat Friday gate aktif (`marketClosed = true`) tetapi `isWeekend = false`, sesi jatuh ke `NEWYORK_SESSION`. Karena sesi itu dianggap "aktif", briefing sesi **tetap dikirim** dan sistem berperilaku seolah pasar masih buka — tepat saat seharusnya sudah diam.
+- **Perbaikan:** Penentuan nama sesi sekarang memakai `marketClosed` (yang sudah mencakup weekend, Jumat malam, dan rollover), bukan `isWeekend`. Variabel `isWeekend` yang sudah tidak dipakai dihapus.
+- **File:** `cmd/scanner/main.go:627`
+
+#### Bug 3 — ILA 3.0 tidak memiliki aturan harian sama sekali (`cmd/ila3-scanner`)
+- **Masalah:** `cmd/scanner` (ILA 2.0) memanggil `GetDailyTradeStatusWIB` untuk aturan **1 win = stop**, **max 2 trade/hari**, dan **2-strike**. `cmd/ila3-scanner` **tidak memanggilnya**; satu-satunya pembatas hanyalah `countOpen == 0`. Artinya ILA 3.0 bisa membuka trade tanpa batas per hari, sehingga hasil ujinya **tidak sebanding** dengan ILA 2.0 dan melanggar aturan trading yang sudah ditetapkan.
+- **Perbaikan:** `positionRepo.GetDailyTradeStatusWIB` diikutkan ke ILA 3.0 (basis WIB, sama seperti ILA 2.0). Bila `CanTrade = false`, setup tetap dilaporkan ke Telegram sebagai **⏸️ DITAHAN** beserta alasannya, tetapi **tidak dieksekusi**. Notifikasi hanya dikirim sekali per simbol (`<sym>-LOCK`) agar tidak spam tiap 15 menit. **Keputusan owner: aturan ini permanen, tanpa flag pengecualian.**
+- **File:** `cmd/ila3-scanner/main.go:157` (init repo), `cmd/ila3-scanner/main.go:312` (gate)
+
+#### Bug 4 — Fallback equity fiktif bisa membuat lot 50x lipat (`cmd/ila3-scanner`)
+- **Masalah:** `equity := 98500.0 // Default fallback`. Bila `GetAccountInfo` gagal (jaringan/token), sistem **tetap mengeksekusi** dengan asumsi ekuitas $98.500. Pada akun riil $1.000, risiko 0,5% dari angka fiktif itu setara ±50x risiko seharusnya.
+- **Perbaikan:** Bila ekuitas gagal dibaca atau `<= 0`, **entry ditolak** dan dikirim peringatan ke Telegram. Ukuran lot tidak boleh ditebak saat data akun tidak ada.
+- **File:** `cmd/ila3-scanner/main.go:322`
+
+#### Bug 5 — SL floor tidak mengikuti desimal instrumen (`pkg/sequence`)
+- **Masalah:** `minSLFloor := 0.00150` dipakai untuk **semua** Forex. Untuk USDJPY (3 desimal) angka itu berarti **0,15 pip**, bukan 15 pip — SL jadi sangat tipis dan langsung tersapu spread. Saat ini belum terpengaruh karena pair yang dipantau hanya XAUUSD/EURUSD/USTEC, tetapi akan menjadi bom waktu saat pair JPY ditambahkan.
+- **Perbaikan:** Dibuat helper `minSLFloorFor(symbol)` yang membedakan Gold, Indeks, Forex JPY (0,150), dan Forex 5 desimal (0,00150). Dua tempat duplikat (Entry 1 & Entry 2) sekarang memakai helper yang sama.
+- **File:** `pkg/sequence/evaluator.go:34`, dipakai di `:216` dan `:321`
+
+#### Perbaikan dokumentasi — rentang R:R TP tidak sesuai kode
+- **Masalah:** Komentar kode dan AGENT_LOG menyebut TP dijepit ke **1:2.5 s.d. 1:4.5**, tetapi kodenya menjepit ke **1:2.0 s.d. 1:4.5** (batas bawah memaksa 2.5 hanya bila hasil < 2.0). Ini bukan bug uang, tetapi membuat audit berikutnya salah pijakan.
+- **Perbaikan:** Komentar disamakan dengan perilaku kode sebenarnya: basis StDev -2.0, dijepit ke **1:2.0 s.d. 1:4.5**.
+- **File:** `pkg/sequence/evaluator.go:250`
+
+#### Unit test baru (mencegah regresi)
+- `cmd/scanner/market_gate_test.go` — 11 kasus batas, termasuk `TestFridayGateNotTooEarly`.
+- `cmd/ila3-scanner/market_gate_test.go` — 7 kasus batas.
+- `pkg/sequence/slfloor_test.go` — SL floor untuk EURUSD, GBPUSD, XAUUSD, GOLD, USTEC, NAS100, USDJPY, GBPJPY.
+
+**Verifikasi:**
+- `go build ./...` ➡️ BERSIH
+- `go vet ./...` ➡️ BERSIH
+- `go test ./pkg/...` ➡️ PASS (kecuali `pkg/marketfeed` yang butuh jaringan ke Binance)
+- `go test ./cmd/scanner/... ./cmd/ila3-scanner/... ./pkg/sequence/...` ➡️ PASS
+
+**Aksi yang diminta (Hermes):**
+1. `git pull origin develop` lalu **rebuild** `ila-scanner` dan `ila3-scanner` (perubahan ada di binary, bukan konfigurasi).
+2. Restart kedua cron/scanner agar binary baru terpakai.
+3. **Jangan** mengubah ambang Friday gate kembali ke 20 tanpa instruksi human — alasan perubahan ada di Bug 1.
+4. Konfirmasi di bagian **⬆️ DARI HERMES** bahwa kedua binary sudah rebuild + waktu restart.
+
+**Catatan untuk Hermes:**
+- **Keputusan owner:** aturan harian ILA 3.0 **tetap sama dengan ILA 2.0** (1 win = stop, max 2 trade/hari WIB, 2-strike, posisi open menahan entry). Tidak dibuat flag, tidak ada pengecualian untuk R&D. Gate ini permanen.
+- Perlu konfirmasi: akun cTrader `#10131354` itu **demo** atau **live**? Fallback equity `98500.0` sebelumnya mengesankan saldo mendekati $100k, sementara nilai `equity` asli tidak pernah tercatat di log.
+
+---
 
 ### [2026-11-06] PERBAIKAN — Market-hours gate, wording notifikasi, & pisah notif vs eksekusi
 - **Pelaku:** Human + Claude

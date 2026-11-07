@@ -241,13 +241,14 @@ func isActiveSession(sess string) bool {
 	return false
 }
 
-// isMarketClosed: weekend (Sabtu/Minggu penuh atau Jumat malam >= 20:00 UTC) atau rollover 22:00-01:00 UTC.
+// isMarketClosed: weekend (Sabtu/Minggu penuh atau Jumat >= 21:00 UTC) atau rollover 22:00-01:00 UTC.
 func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
 	if utcDay == time.Saturday || utcDay == time.Sunday {
 		return true
 	}
-	// Jumat malam mulai 20:00 UTC (03:00 WIB Sabtu) menjelang market close & spread melebar
-	if utcDay == time.Friday && utcHour >= 20 {
+	// Jumat >= 21:00 UTC (04:00 WIB Sabtu): margin 1 jam sebelum penutupan akhir pekan,
+	// menghindari spread melebar tanpa memotong sesi New York.
+	if utcDay == time.Friday && utcHour >= 21 {
 		return true
 	}
 	// Rollover subuh: 22:00 - 01:00 UTC (05:00 - 08:00 WIB).
@@ -625,14 +626,13 @@ func main() {
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
 	marketClosed := isMarketClosed(utcDay, utcHour)
-	isWeekend := utcDay == time.Saturday || utcDay == time.Sunday
 	isRollover := utcHour >= 22 || utcHour < 1     // 05:00 - 08:00 WIB
 	isOverlap := (utcHour >= 12 && utcHour < 17)   // 19:00 - 00:00 WIB
 	isLondonOnly := (utcHour >= 7 && utcHour < 12) // 14:00 - 19:00 WIB
 	isNYOnly := (utcHour >= 17 && utcHour < 22)    // 00:00 - 05:00 WIB
 
 	currentSession := "ASIAN_SESSION"
-	if isWeekend {
+	if marketClosed {
 		currentSession = "WEEKEND_CLOSED"
 	} else if isRollover {
 		currentSession = "ROLLOVER_BLACKOUT"

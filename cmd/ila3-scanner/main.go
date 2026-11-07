@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"ila-engine/internal/model"
+	"ila-engine/internal/repository"
 	"ila-engine/pkg/broker"
 	"ila-engine/pkg/indicators"
 	"ila-engine/pkg/marketfeed"
@@ -70,12 +71,13 @@ func saveState(s MonitorState) {
 	}
 }
 
+// isMarketClosed: weekend (Sabtu/Minggu penuh atau Jumat >= 21:00 UTC) atau rollover 22:00-01:00 UTC.
 func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
 	if utcDay == time.Saturday || utcDay == time.Sunday {
 		return true
 	}
-	// Jumat malam mulai 20:00 UTC (03:00 WIB Sabtu) menjelang market close & spread melebar
-	if utcDay == time.Friday && utcHour >= 20 {
+	// Jumat >= 21:00 UTC (04:00 WIB Sabtu): margin 1 jam sebelum penutupan akhir pekan.
+	if utcDay == time.Friday && utcHour >= 21 {
 		return true
 	}
 	if utcHour >= 22 || utcHour < 1 {
@@ -158,6 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 	_ = db.AutoMigrate(&model.Position{})
+
+	// Aturan harian (1 win = stop, max 2 trade/hari, 2-strike) berbasis WIB —
+	// sama seperti ILA 2.0 agar hasil uji kedua engine bisa dibandingkan.
+	positionRepo := repository.NewPositionRepository(db)
 
 	// 2. Initialize cTrader Broker client exclusively for ILA 3.0
 	cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
@@ -310,6 +316,18 @@ func main() {
 				db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN'", sym).Count(&countOpen)
 
 				if countOpen == 0 && cTraderBroker != nil && prevState.LastState != "ENTRY" {
+					// Aturan harian WIB: 1 win = stop, kuota 2 trade, 2-strike & posisi open.
+					dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(ctx, time.Now())
+					if dailyStatus != nil && !dailyStatus.CanTrade {
+						lockKey := sym + "-LOCK"
+						if prevState.LastState != lockKey {
+							messages = append(messages, fmt.Sprintf("⏸️ **[ILA 3.0 DITAHAN] %s %s**\nSetup %s terdeteksi namun tidak dieksekusi.\n*Alasan:* %s", sEmoji, sName, setup.SetupType, dailyStatus.LockReason))
+							prevState.LastState = lockKey
+							state.Pairs[key] = prevState
+						}
+						continue
+					}
+
 					dir := "BUY"
 					dirEmoji := "🟢 BUY"
 					if setup.Bias == "BEARISH" {
@@ -317,12 +335,18 @@ func main() {
 						dirEmoji = "🔴 SELL"
 					}
 
-					acc, _ := cTraderBroker.GetAccountInfo(ctx)
-					equity := 98500.0 // Default fallback cTrader equity
-					if acc != nil && acc.Equity > 0 {
+					acc, accErr := cTraderBroker.GetAccountInfo(ctx)
+					var equity float64
+					if acc != nil {
 						equity = acc.Equity
-					} else if acc != nil && acc.Balance > 0 {
-						equity = acc.Balance
+						if equity <= 0 {
+							equity = acc.Balance
+						}
+					}
+					// Tanpa ekuitas terverifikasi, ukuran lot tidak bisa dihitung aman: tolak entry.
+					if accErr != nil || equity <= 0 {
+						messages = append(messages, fmt.Sprintf("⚠️ **[ILA 3.0] Eksekusi Dibatalkan — %s %s**\nGagal membaca ekuitas akun cTrader. Entry ditolak agar ukuran lot tidak salah.\n*Error:* `%v`", sEmoji, sName, accErr))
+						continue
 					}
 					riskDollars := equity * 0.005 // strict 0.5% live equity risk
 					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
