@@ -242,6 +242,79 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-09] PERBAIKAN — Banjir log saat simbol gagal dievaluasi
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+---
+
+#### Latar
+
+Sisa terakhir dari migrasi engine gRPC. Bukan perubahan perilaku trading, hanya
+kualitas operasional log.
+
+**Batas yang dipatuhi:** `pkg/ila`, `pkg/sequence`, `pkg/keylevels`,
+`pkg/quarterly`, `pkg/ssmt`, `pkg/stdev`, `pkg/risk`, `pkg/indicators`
+**nol perubahan** (`git diff --stat pkg/` kosong).
+
+---
+
+#### Masalah
+
+`Publisher.Scan` berjalan tiap menit untuk setiap slot (simbol × HTF × LTF).
+Saat `Evaluate` gagal — paling sering karena simbol salah ketik, atau feed
+sedang tidak menyediakan simbol itu — log menulis satu baris peringatan **tiap
+menit per slot**, tanpa henti. Satu simbol bermasalah dengan 2 pasangan TF saja
+sudah menghasilkan ~2.880 baris per hari. Log engine tenggelam dan kegagalan
+lain yang penting jadi tidak terlihat.
+
+---
+
+#### Perbaikan
+
+Kegagalan evaluasi dicatat paling sering **sekali per menit per slot**.
+
+| Hal | Sebelum | Sesudah |
+|---|---|---|
+| Simbol salah ketik | log tiap scan (1 menit) per slot | log maksimal 1×/menit per slot |
+| Isi log | `symbol`, `htf`, `ltf`, `error` | sama, tidak ada yang hilang |
+| Perilaku sinyal | gagal = tidak terbit sinyal | tetap sama |
+
+Kunci pembatasnya `signal.Key(symbol, htf, ltf)` — sama dengan kunci slot —
+sehingga antar slot tidak saling memblokir. Setelah satu menit berlalu,
+kegagalan yang masih berlangsung dicatat lagi; kalau feed pulih lalu gagal lagi,
+kegagalan baru langsung tercatat.
+
+**File:** `internal/engine/publisher.go` (`logGagal`, field `gagalPada`)
+
+---
+
+#### Verifikasi
+
+| Uji | Hasil |
+|---|---|
+| `go build ./...` | ✅ |
+| `go test ./internal/engine/ ./internal/signal/ ./internal/market/` | ✅ |
+| Mutasi: guard waktu dimatikan → tes harus gagal | ✅ gagal seperti diharapkan |
+| `git diff --stat pkg/` | ✅ kosong |
+
+Tes `TestLogGagalDibatasiPerMenit` mengunci dua hal: dua scan dalam menit yang
+sama hanya menghasilkan satu catatan, dan scan setelah 61 detik menghasilkan
+catatan kedua.
+
+---
+
+#### Catatan untuk Hermes
+
+- Log tetap membawa pesan `error` aslinya, jadi penyebab kegagalan tetap bisa
+didiagnosis dari baris yang tercatat.
+- Tidak ada perubahan pada kontrak gRPC, state sinyal, maupun jam pasar.
+- `mt_symbols.json` (121 KB) masih untracked di akar repo. Bukan buatan Claude;
+sengaja tidak di-commit.
+
+---
+
 ### [2026-11-08] SELESAI — S7 flag eksekusi, S8 langganan dinamis, S9 hapus BBMA, penamaan ILA 2.0
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN + FITUR

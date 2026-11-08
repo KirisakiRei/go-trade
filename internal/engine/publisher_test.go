@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,6 +221,31 @@ func TestEvaluatorGagalTidakMenerbitkan(t *testing.T) {
 
 	if len(*got) != 0 {
 		t.Fatalf("sinyal = %d, ingin 0 saat evaluasi gagal", len(*got))
+	}
+}
+
+// Kegagalan berulang pada slot yang sama hanya dicatat sekali per menit, agar
+// simbol yang salah ketik tidak menenggelamkan log engine.
+func TestLogGagalDibatasiPerMenit(t *testing.T) {
+	now := jamBuka
+	var buf bytes.Buffer
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "a", Symbols: map[string]struct{}{"XAUUSD": {}}})
+	eval := &fakeEvaluator{strategy: "ila-2.0", pairs: []Pair{{HTF: "H4", LTF: "M15"}}, err: errBoom}
+	pub := NewPublisher(eval, reg, Version{}, slog.New(slog.NewTextHandler(&buf, nil))).
+		WithClock(func() time.Time { return now })
+
+	pub.Scan(context.Background())
+	pub.Scan(context.Background())
+	if n := strings.Count(buf.String(), "evaluasi gagal"); n != 1 {
+		t.Fatalf("catatan dalam menit sama = %d, ingin 1", n)
+	}
+
+	// Setelah lewat satu menit kegagalan yang masih berlangsung dicatat lagi.
+	pub.WithClock(func() time.Time { return now.Add(61 * time.Second) })
+	pub.Scan(context.Background())
+	if n := strings.Count(buf.String(), "evaluasi gagal"); n != 2 {
+		t.Fatalf("catatan setelah lewat menit = %d, ingin 2", n)
 	}
 }
 

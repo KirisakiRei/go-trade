@@ -26,6 +26,8 @@ type Publisher struct {
 	mu    sync.Mutex
 	seq   int64
 	slots map[string]*slotState
+	// gagalPada mencatat kapan slot terakhir gagal, untuk membatasi log.
+	gagalPada map[string]time.Time
 
 	// abaikanJamPasar hanya untuk pengujian: memaksa engine mengevaluasi
 	// walau pasar tutup. Tidak pernah aktif di produksi.
@@ -44,12 +46,13 @@ type slotState struct {
 // NewPublisher merangkai evaluator dengan registry pelanggan.
 func NewPublisher(eval Evaluator, reg *Registry, version Version, log *slog.Logger) *Publisher {
 	return &Publisher{
-		eval:    eval,
-		reg:     reg,
-		version: version,
-		log:     log,
-		now:     func() time.Time { return time.Now().UTC() },
-		slots:   make(map[string]*slotState),
+		eval:      eval,
+		reg:       reg,
+		version:   version,
+		log:       log,
+		now:       func() time.Time { return time.Now().UTC() },
+		slots:     make(map[string]*slotState),
+		gagalPada: make(map[string]time.Time),
 	}
 }
 
@@ -97,9 +100,10 @@ func (p *Publisher) Scan(ctx context.Context) {
 func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, now time.Time) {
 	res, err := p.eval.Evaluate(symbol, pair.HTF, pair.LTF)
 	if err != nil {
-		// Gagal mengambil data bukan sinyal; cukup dicatat.
-		p.log.Warn("evaluasi gagal",
-			"symbol", symbol, "htf", pair.HTF, "ltf", pair.LTF, "error", err.Error())
+		// Gagal mengambil data bukan sinyal. Dicatat paling sering sekali per
+		// menit per slot: simbol yang salah ketik akan gagal terus dan tanpa
+		// batas ini log engine tenggelam.
+		p.logGagal(symbol, pair, err)
 		return
 	}
 	if res == nil {
@@ -244,6 +248,24 @@ func (p *Publisher) ActiveCount() int {
 		}
 	}
 	return n
+}
+
+// logGagal mencatat kegagalan evaluasi dengan jeda agar tidak membanjiri log.
+func (p *Publisher) logGagal(symbol string, pair Pair, err error) {
+	key := signal.Key(symbol, pair.HTF, pair.LTF)
+	now := p.now()
+
+	p.mu.Lock()
+	terakhir, ada := p.gagalPada[key]
+	if ada && now.Sub(terakhir) < time.Minute {
+		p.mu.Unlock()
+		return
+	}
+	p.gagalPada[key] = now
+	p.mu.Unlock()
+
+	p.log.Warn("evaluasi gagal",
+		"symbol", symbol, "htf", pair.HTF, "ltf", pair.LTF, "error", err.Error())
 }
 
 // broadcastStatus mengirim status menunggu. Tidak pernah membawa harga dan
