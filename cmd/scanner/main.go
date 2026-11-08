@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ila-engine/internal/datadir"
 	"ila-engine/internal/dto"
 	"ila-engine/internal/market"
 	"ila-engine/internal/model"
@@ -27,8 +28,6 @@ import (
 )
 
 const (
-	DBPath             = "/opt/data/ila-engine/ila.db"
-	StateFilePath      = "/opt/data/ila-engine/monitor_state.json"
 	AccountSize        = 10000.0
 	DefaultRiskPercent = 0.50
 	MinRR              = 2.0
@@ -36,6 +35,10 @@ const (
 )
 
 var Pairs = []string{"XAUUSD", "EURUSD", "USTEC"}
+
+// DBPath dan StateFilePath mengikuti ILA_DATA_DIR agar aman di Docker.
+func DBPath() string        { return datadir.Berkas("ila.db") }
+func StateFilePath() string { return datadir.Berkas("monitor_state.json") }
 
 type PairState struct {
 	LastM15AsOf   string `json:"last_m15_as_of"`
@@ -62,7 +65,7 @@ func loadState() MonitorState {
 	var s MonitorState
 	s.Pairs = make(map[string]PairState)
 	s.ILAPairs = make(map[string]ILAPairState)
-	data, err := os.ReadFile(StateFilePath)
+	data, err := os.ReadFile(StateFilePath())
 	if err == nil {
 		_ = json.Unmarshal(data, &s)
 	}
@@ -76,9 +79,7 @@ func loadState() MonitorState {
 }
 
 func saveState(s MonitorState) {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err == nil {
-		_ = os.WriteFile(StateFilePath, data, 0644)
+	if err := datadir.TulisJSON(StateFilePath(), s); err == nil {
 	}
 }
 
@@ -290,7 +291,7 @@ func main() {
 	var messages []string
 
 	// 1. Connect SQLite
-	db, err := gorm.Open(sqlite.Open(DBPath), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(DBPath()), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {

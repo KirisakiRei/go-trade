@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	osignal "os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,8 @@ import (
 	enginev1 "ila-engine/gen/engine/v1"
 	"ila-engine/internal/engine"
 	"ila-engine/internal/grpcserver"
+	"ila-engine/internal/logkit"
+	"ila-engine/internal/logsync"
 	"ila-engine/internal/market"
 	"ila-engine/internal/service"
 	"ila-engine/pkg/marketfeed"
@@ -43,10 +46,39 @@ func main() {
 		version  = flag.String("version", env("ENGINE_VERSION", "dev"), "versi engine untuk log & sinyal")
 		verbose  = flag.Bool("v", false, "log debug")
 		demo     = flag.Bool("demo", false, "evaluator tiruan untuk uji alur sinyal tanpa data pasar")
+		logDir   = flag.String("log-dir", env("ENGINE_LOG_DIR", "/opt/data/ila-engine/logs"), "folder log harian; kosong = hanya stdout")
+		logHari  = flag.Int("log-hari", envInt("ENGINE_LOG_HARI", 7), "hari penyimpanan log sebelum dihapus")
+		logBatas = flag.Int64("log-batas-mb", envInt64("ENGINE_LOG_BATAS_MB", 150), "batas total ukuran log dalam MB")
+		logKirim = flag.String("log-kirim", env("ENGINE_LOG_GRPC_ADDR", ""), "alamat platform penerima log; kosong = hanya lokal")
+		logCert  = flag.String("log-cert", env("ENGINE_LOG_MTLS_CERT", ""), "sertifikat klien untuk mengirim log")
+		logKey   = flag.String("log-key", env("ENGINE_LOG_MTLS_KEY", ""), "kunci klien untuk mengirim log")
+		logCA    = flag.String("log-ca", env("ENGINE_LOG_MTLS_CA", ""), "CA platform untuk verifikasi")
 	)
 	flag.Parse()
 
-	logger := newLogger(*verbose)
+	// Pengirim disiapkan lebih dulu karena logger membutuhkan hook salinannya.
+	pengirim := logsync.Baru(logsync.Opsi{
+		Addr:     *logKirim,
+		Layanan:  "engine",
+		CertFile: *logCert,
+		KeyFile:  *logKey,
+		CAFile:   *logCA,
+	})
+
+	hasilLog := logkit.Buat(logkit.Opsi{
+		Dir:        *logDir,
+		Layanan:    "engine",
+		Level:      pilihLevel(*verbose),
+		JugaStdout: true,
+		HariSimpan: *logHari,
+		BatasBytes: *logBatas * 1024 * 1024,
+		Salin:      pengirim.Kirim,
+	})
+	defer hasilLog.Tutup()
+
+	logger := hasilLog.Logger
+	slog.SetDefault(logger)
+	pengirim.SetLog(logger)
 
 	reg := engine.NewRegistry()
 
@@ -112,6 +144,8 @@ func main() {
 	defer stop()
 
 	go scanLoop(ctx, pub, *interval, logger)
+	go rawatLoop(ctx, hasilLog, logger)
+	go pengirim.Jalankan(ctx)
 
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -177,6 +211,30 @@ func scanLoop(ctx context.Context, pub *engine.Publisher, interval time.Duration
 	}
 }
 
+// rawatLoop menjalankan retensi log di awal dan tiap tengah malam.
+// Retensi berjalan tanpa memblokir evaluasi sinyal.
+func rawatLoop(ctx context.Context, hasil *logkit.Hasil, log *slog.Logger) {
+	if hasil.Rawat == nil {
+		return
+	}
+	if err := hasil.Rawat(); err != nil {
+		log.Warn("perawatan log gagal", "evt", "log.rawat.gagal", "error", err.Error())
+	}
+
+	t := time.NewTicker(6 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := hasil.Rawat(); err != nil {
+				log.Warn("perawatan log gagal", "evt", "log.rawat.gagal", "error", err.Error())
+			}
+		}
+	}
+}
+
 func serverCreds(certFile, keyFile, caFile string) (credentials.TransportCredentials, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -200,12 +258,35 @@ func serverCreds(certFile, keyFile, caFile string) (credentials.TransportCredent
 	return credentials.NewTLS(cfg), nil
 }
 
-func newLogger(verbose bool) *slog.Logger {
-	level := slog.LevelInfo
+func pilihLevel(verbose bool) slog.Level {
 	if verbose {
-		level = slog.LevelDebug
+		return slog.LevelDebug
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	return slog.LevelInfo
+}
+
+func envInt(k string, def int) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+func envInt64(k string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 func env(k, def string) string {

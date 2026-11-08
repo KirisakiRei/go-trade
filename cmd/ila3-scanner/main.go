@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"ila-engine/internal/datadir"
 	"ila-engine/internal/market"
 	"ila-engine/internal/model"
 	"ila-engine/internal/repository"
@@ -28,12 +29,14 @@ import (
 )
 
 const (
-	DBPath        = "/opt/data/ila-engine/ila3.db"
-	StateFilePath = "/opt/data/ila-engine/monitor_state_ila3.json"
-	MinRR         = 2.0
+	MinRR = 2.0
 )
 
 var Pairs = []string{"XAUUSD", "EURUSD", "USTEC"}
+
+// DBPath dan StateFilePath mengikuti ILA_DATA_DIR agar aman di Docker.
+func DBPath() string        { return datadir.Berkas("ila3.db") }
+func StateFilePath() string { return datadir.Berkas("monitor_state_ila3.json") }
 
 var CorrelationMap = map[string]string{
 	"XAUUSD": "XAGUSD",
@@ -56,7 +59,7 @@ func loadState() MonitorState {
 	s := MonitorState{
 		Pairs: make(map[string]ILA3PairState),
 	}
-	data, err := os.ReadFile(StateFilePath)
+	data, err := os.ReadFile(StateFilePath())
 	if err == nil {
 		_ = json.Unmarshal(data, &s)
 	}
@@ -67,9 +70,7 @@ func loadState() MonitorState {
 }
 
 func saveState(s MonitorState) {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err == nil {
-		_ = os.WriteFile(StateFilePath, data, 0644)
+	if err := datadir.TulisJSON(StateFilePath(), s); err == nil {
 	}
 }
 
@@ -153,7 +154,7 @@ func main() {
 	var messages []string
 
 	// 1. Connect SQLite database
-	db, err := gorm.Open(sqlite.Open(DBPath), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(DBPath()), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {

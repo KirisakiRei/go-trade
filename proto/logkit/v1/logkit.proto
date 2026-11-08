@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package logkit.v1;
+
+option go_package = "ila-engine/gen/logkit/v1;logkitv1";
+
+// LogService menerima log Engine agar bisa dibaca dari satu tempat di VPS
+// platform.
+//
+// Arah koneksi tetap Engine -> Platform dan diinisiasi Engine, sehingga VPS
+// platform tidak pernah perlu bisa menjangkau VPS Engine.
+//
+// Engine SELALU menulis log ke berkas lokal lebih dulu. Kiriman ini bersifat
+// pelengkap: bila platform mati, trading tidak boleh terganggu.
+service LogService {
+  // KirimLog mengalirkan baris log. Engine mengakhiri aliran saat shutdown
+  // atau saat ingin menyambung ulang.
+  rpc KirimLog(stream LogEntry) returns (LogSummary);
+}
+
+// LogEntry adalah satu baris log yang sudah berbentuk JSON utuh.
+//
+// Baris dikirim apa adanya agar format yang tersimpan di platform identik
+// dengan berkas lokal Engine, tanpa penerjemahan yang bisa berbeda.
+message LogEntry {
+  // baris JSON siap tulis (tanpa newline).
+  bytes baris = 1;
+  // layanan asal, misal "engine".
+  string layanan = 2;
+  // waktu kejadian dalam UTC, format RFC3339 milidetik.
+  string waktu = 3;
+}
+
+message LogSummary {
+  // jumlah baris yang berhasil diterima.
+  int64 diterima = 1;
+  // jumlah baris yang ditolak (bukan JSON, atau terlalu besar).
+  int64 ditolak = 2;
+  string pesan = 3;
+}

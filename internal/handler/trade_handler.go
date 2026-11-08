@@ -5,7 +5,6 @@ import (
 
 	"ila-engine/internal/dto"
 	"ila-engine/internal/service"
-	"ila-engine/pkg/apperror"
 	"ila-engine/pkg/httpx"
 
 	"github.com/gin-gonic/gin"
@@ -26,29 +25,30 @@ func NewTradeHandler(executionService service.ExecutionService, evaluationServic
 func (h *TradeHandler) ExecuteILA(c *gin.Context) {
 	var req dto.ILA2ExecuteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid ILA trade execution payload", err.Error())
+		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST",
+			"Data eksekusi ILA tidak sah", nil)
 		return
 	}
 
 	res, err := h.executionService.EvaluateAndExecuteILA(c.Request.Context(), req)
 	if err != nil {
-		status, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, status, code, err.Error(), nil)
+		httpx.Gagal(c, err, "trade.eksekusi.gagal")
 		return
 	}
 
 	if !res.Executed {
-		httpx.OK(c, "ILA trade evaluation completed: order rejected by quality gate", res)
+		httpx.OK(c, "Evaluasi ILA selesai: order ditolak oleh quality gate", res)
 		return
 	}
 
-	httpx.Created(c, "ILA position successfully opened", res)
+	httpx.Created(c, "Posisi ILA berhasil dibuka", res)
 }
 
 func (h *TradeHandler) ListPositions(c *gin.Context) {
 	var p dto.PaginationQuery
 	if err := c.ShouldBindQuery(&p); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid pagination query", err.Error())
+		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST",
+			"Parameter paginasi tidak sah", nil)
 		return
 	}
 
@@ -57,58 +57,58 @@ func (h *TradeHandler) ListPositions(c *gin.Context) {
 
 	positions, meta, err := h.executionService.ListPositions(c.Request.Context(), symbol, status, p)
 	if err != nil {
-		statusErr, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, statusErr, code, err.Error(), nil)
+		httpx.Gagal(c, err, "trade.daftar.posisi.gagal")
 		return
 	}
 
-	httpx.OKWithMeta(c, "Positions retrieved successfully", positions, meta)
+	httpx.OKWithMeta(c, "Daftar posisi diambil", positions, meta)
 }
 
 func (h *TradeHandler) GetAccount(c *gin.Context) {
 	acc, err := h.executionService.GetAccount(c.Request.Context())
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get account info", err.Error())
+		httpx.Gagal(c, err, "trade.akun.gagal")
 		return
 	}
 
-	httpx.OK(c, "Account info retrieved", acc)
+	httpx.OK(c, "Informasi akun diambil", acc)
 }
 
 func (h *TradeHandler) GetPendingSignals(c *gin.Context) {
 	signals := h.executionService.GetPendingSignals()
-	httpx.OK(c, "Pending signals retrieved", signals)
+	httpx.OK(c, "Sinyal tertunda diambil", signals)
 }
 
 func (h *TradeHandler) ConfirmSignal(c *gin.Context) {
 	var req dto.ConfirmSignalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid confirmation payload", err.Error())
+		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST",
+			"Data konfirmasi tidak sah", nil)
 		return
 	}
 
 	if err := h.executionService.ConfirmSignal(c.Request.Context(), req); err != nil {
-		httpx.Error(c, http.StatusNotFound, "NOT_FOUND", err.Error(), nil)
+		httpx.Gagal(c, err, "trade.konfirmasi.gagal")
 		return
 	}
 
-	httpx.OK(c, "Signal confirmed and recorded", nil)
+	httpx.OK(c, "Sinyal dikonfirmasi dan dicatat", nil)
 }
 
 func (h *TradeHandler) ListEvaluations(c *gin.Context) {
 	evals, err := h.evaluationService.ListRecentEvaluations(c.Request.Context(), 20)
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list evaluations", err.Error())
+		httpx.Gagal(c, err, "eval.daftar.gagal")
 		return
 	}
-	httpx.OK(c, "Trade evaluations retrieved successfully", evals)
+	httpx.OK(c, "Evaluasi trading diambil", evals)
 }
 
 func (h *TradeHandler) GetEvaluationStats(c *gin.Context) {
 	stats, err := h.evaluationService.GetEvaluationSummary(c.Request.Context())
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get evaluation stats", err.Error())
+		httpx.Gagal(c, err, "eval.statistik.gagal")
 		return
 	}
-	httpx.OK(c, "Evaluation statistics and lessons retrieved", stats)
+	httpx.OK(c, "Statistik evaluasi dan pelajaran diambil", stats)
 }

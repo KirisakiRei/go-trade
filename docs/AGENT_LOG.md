@@ -242,6 +242,206 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-09] INFRASTRUKTUR — Log harian JSONL, retensi otomatis, kirim ke platform, tutup kebocoran error
+- **Pelaku:** Claude
+- **Tipe:** FITUR + PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+---
+
+#### Latar
+
+Engine berjalan di VPS 1, Runner dan Console di VPS 2. Selama ini semua log
+hanya keluar ke stdout dan ditangkap Docker dengan batas **10 MB × 2 berkas**.
+Begitu 20 MB terlampaui, log lama hilang permanen — saat insiden minggu lalu
+ditanyakan, buktinya sudah tidak ada.
+
+**Batas yang dipatuhi:** `pkg/ila`, `pkg/sequence`, `pkg/keylevels`,
+`pkg/quarterly`, `pkg/ssmt`, `pkg/stdev`, `pkg/risk`, `pkg/indicators`
+**nol perubahan**. Diverifikasi dengan `git diff --stat` pada kedelapan paket.
+
+---
+
+#### 1. Paket `internal/logkit` — berkas harian + retensi
+
+Semua layanan (engine, runner, backend-api) kini menulis **JSONL** ke:
+
+```
+logs/2026/11/08/engine-2026-11-08.log
+logs/2026/11/08/runner-2026-11-08.log
+```
+
+Kunci JSON pendek dan tetap, agar baris ringkas sekaligus bisa di-query:
+
+```json
+{"t":"2026-11-08T10:15:03.000Z","lvl":"INFO","svc":"engine",
+ "evt":"signal.publish","msg":"sinyal terbit","symbol":"XAUUSD"}
+```
+
+| Kunci | Isi |
+|---|---|
+| `t` | waktu UTC, presisi milidetik |
+| `lvl` | DEBUG / INFO / WARN / ERROR |
+| `svc` | engine / runner / backend-api |
+| `evt` | nama kejadian berpola, misal `signal.publish`, `log.kirim.terputus` |
+| `trace` | nomor rangkaian, sama di kedua VPS |
+| `msg` | pesan untuk manusia |
+
+**Retensi (bukan garbage collection).** GC Go mengurus memori heap, bukan
+berkas log. Yang diurus di sini adalah siklus hidup berkas:
+
+| Aturan | VPS 1 (engine) | VPS 2 (platform) |
+|---|---|---|
+| Masa simpan | **7 hari** | **30 hari** |
+| Batas ukuran | **150 MB** | 1 GB |
+| Kompresi | hari lewat → `.gz` | sama |
+
+Batas ukuran bersifat mutlak: bila terlampaui, hari tertua dihapus lebih dulu
+meski belum melewati masa simpan. **Hari ini tidak pernah dihapus**, supaya
+folder yang sedang ditulis tidak hilang di tengah jalan.
+
+Perawatan berjalan saat start lalu tiap 6 jam, di goroutine terpisah sehingga
+tidak menahan evaluasi sinyal.
+
+---
+
+#### 2. RPC `LogService.KirimLog` — engine → platform
+
+Engine **selalu** menulis log lokal lebih dulu, lalu mengirim salinannya ke
+platform lewat gRPC streaming. Saat insiden, semua log bisa dibaca dari satu
+tempat tanpa membuka dua SSH.
+
+**Arah koneksi: Engine → Platform.** VPS platform tidak pernah perlu bisa
+menjangkau VPS Engine, sama seperti pola yang sudah dipakai Runner→Engine.
+
+```
+VPS 1                          VPS 2
+engine ──gRPC streaming──►  runner (penerima log)
+  │                              │
+  └─ logs/2026/11/08/            └─ logs/2026/11/08/
+     engine-*.log (selalu)          engine-*.log (salinan)
+```
+
+Pengiriman bersifat **pelengkap**:
+
+- antrean penuh → baris dibuang dan dihitung, engine tidak pernah menunggu
+- platform mati → engine tetap mengevaluasi sinyal tanpa gangguan
+- sambung ulang dengan jeda bertingkat 1s → 30s, kembali ke 1s bila sesi
+  sebelumnya bertahan ≥ 30 detik
+
+**mTLS wajib.** Penerima log di platform meminta sertifikat klien yang
+ditandatangani CA kita (`tls.RequireAndVerifyClientCert`). Tanpa itu siapa pun
+yang menemukan port tersebut bisa menyuntik log palsu dan meracuni audit.
+
+---
+
+#### 3. Trace lintas dua VPS
+
+Runner mengirim metadata gRPC `x-ila-trace` pada setiap panggilan, dan Engine
+memasukkannya ke setiap baris log. Satu sinyal kini bisa ditelusuri utuh:
+
+```bash
+grep a1b2c3 logs/2026/11/08/engine-*.log    # asal sinyal
+grep a1b2c3 logs/2026/11/08/runner-*.log    # apa yang dilakukan Runner
+```
+
+---
+
+#### 4. Kebocoran pesan error ditutup
+
+**Masalah.** Handler HTTP mengirim `err.Error()` mentah ke respons. Bila
+kegagalan berasal dari feed atau berkas, pemanggil bisa melihat nama host,
+path server, atau detail driver.
+
+**Perbaikan.** Helper baru `httpx.Gagal`:
+
+| Tujuan | Isi |
+|---|---|
+| Log | error asli lengkap + `evt` + path |
+| Respons HTTP | pesan aman, misal "Terjadi kesalahan pada server" |
+
+Pemetaan pesan aman per jenis error: `NOT_FOUND` → "Data tidak ditemukan",
+`INSUFFICIENT_DATA` → "Data pasar belum cukup untuk analisis",
+`MARKET_FEED_FAILED` → "Sumber data pasar sedang tidak tersedia".
+
+Tujuh tempat yang bocor sudah diperbaiki di `analysis_handler.go` dan
+`trade_handler.go`. Pesan yang dibaca manusia juga dirapikan ke bahasa yang
+konsisten.
+
+---
+
+#### 5. Path data bisa dipindah, state ditulis atomik
+
+**Masalah A.** `ila.db` dan `monitor_state.json` memakai path absolut
+`/opt/data/ila-engine/`. Di dalam container, path itu menunjuk ke tempat yang
+salah.
+
+**Masalah B.** State ditulis dengan `os.WriteFile` biasa. Bila proses mati di
+tengah penulisan, berkas rusak dan engine gagal memuat posisi saat start.
+
+**Perbaikan.** Paket `internal/datadir`:
+
+- `ILA_DATA_DIR` menentukan folder data (default tetap `/opt/data/ila-engine`)
+- `TulisJSON` menulis ke berkas sementara di folder yang sama, `fsync`, lalu
+  `rename`. Rename dalam satu filesystem bersifat atomik.
+
+---
+
+#### Verifikasi
+
+| Uji | Hasil |
+|---|---|
+| `go build ./...` | ✅ |
+| `go vet ./...` | ✅ |
+| `go test ./...` | ✅ **17 paket lulus** (sebelumnya 14) |
+| `pkg/marketfeed` | ❌ butuh jaringan Binance (gagal sejak awal) |
+| Mutasi retensi: guard dimatikan → tes harus gagal | ✅ gagal seperti diharapkan |
+| **End-to-end**: engine (proses A) → gRPC → penerima platform (proses B) | ✅ berkas di platform **byte-identik** dengan berkas lokal engine |
+| **Resiliensi**: platform dimatikan total, engine tetap jalan 9 detik | ✅ log lokal tetap tertulis, evaluasi sinyal tetap berjalan |
+| `cli -symbol XAUUSD -htf H4 -ltf M15` setelah semua perubahan | ✅ sweep FVG, DOL, CISD keluar benar |
+| `git diff --stat` pada 8 paket rules trading | ✅ kosong |
+
+Bukti end-to-end yang sebenarnya (bukan klaim):
+
+```
+$ diff engine-lokal.log platform-terima.log
+IDENTIK ✅
+
+$ wc -l logs/2026/11/08/engine-2026-11-08.log
+6
+```
+
+---
+
+#### Berkas baru
+
+| Berkas | Isi |
+|---|---|
+| `internal/logkit/` | penulis JSONL harian, retensi, kompresi |
+| `internal/logsync/` | pengirim log ke platform |
+| `internal/datadir/` | folder data dari env + tulis atomik |
+| `internal/grpcserver/trace.go` | trace dari metadata gRPC |
+| `proto/logkit/v1/logkit.proto` | kontrak `LogService` |
+| `pkg/httpx/gagal.go` | pemisahan error log ↔ pesan HTTP |
+
+**Flag baru `cmd/engine`:** `-log-dir`, `-log-hari`, `-log-batas-mb`,
+`-log-kirim`, `-log-cert`, `-log-key`, `-log-ca`.
+
+---
+
+#### Catatan untuk Hermes
+
+- **Aturan trading tidak berubah sama sekali.** Log, retensi, dan pengiriman
+  hanya menyentuh lapisan operasional.
+- Format log di Engine dan platform **identik**, jadi berkas dari kedua VPS bisa
+  digabung dengan `cat` lalu di-query sekali.
+- Env baru yang relevan di VPS 1: `ILA_DATA_DIR`, `ENGINE_LOG_DIR`,
+  `ENGINE_LOG_GRPC_ADDR` (kosong = hanya log lokal), `ENGINE_LOG_MTLS_*`.
+- Sisi platform (Runner) menerima di `LOG_GRPC_ADDR` (default `:9090`) dengan
+  mTLS wajib. Sertifikat: `/certs/log-server.crt`, `.key`, `/certs/ca.crt`.
+
+---
+
 ### [2026-11-09] PENGHAPUSAN — BBMA dikeluarkan dari engine, jalur ILA utuh
 - **Pelaku:** Claude
 - **Tipe:** PENGHAPUSAN

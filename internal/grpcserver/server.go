@@ -61,7 +61,8 @@ func New(d Deps) *Server {
 // Subscribe mengganti daftar simbol satu pelanggan.
 // Symbol yang tidak dikenali tetap diterima: daftar simbol yang sah ada di
 // konfigurasi engine, bukan di sini.
-func (s *Server) Subscribe(_ context.Context, req *enginev1.SubscribeRequest) (*enginev1.SubscribeResponse, error) {
+func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) (*enginev1.SubscribeResponse, error) {
+	log := loggerDenganTrace(ctx, s.log)
 	if req.GetSubscriberId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "subscriber_id wajib diisi")
 	}
@@ -74,7 +75,8 @@ func (s *Server) Subscribe(_ context.Context, req *enginev1.SubscribeRequest) (*
 		Send:       s.senderFor(req.GetSubscriberId()),
 	})
 
-	s.log.Info("pelanggan berlangganan",
+	log.Info("pelanggan berlangganan",
+		"evt", "subscribe.ok",
 		"subscriber", req.GetSubscriberId(), "symbols", symbols)
 
 	return &enginev1.SubscribeResponse{
@@ -85,7 +87,8 @@ func (s *Server) Subscribe(_ context.Context, req *enginev1.SubscribeRequest) (*
 }
 
 // Unsubscribe mencabut sebagian simbol pelanggan.
-func (s *Server) Unsubscribe(_ context.Context, req *enginev1.UnsubscribeRequest) (*enginev1.SubscribeResponse, error) {
+func (s *Server) Unsubscribe(ctx context.Context, req *enginev1.UnsubscribeRequest) (*enginev1.SubscribeResponse, error) {
+	log := loggerDenganTrace(ctx, s.log)
 	id := req.GetSubscriberId()
 	if id == "" {
 		return nil, status.Error(codes.InvalidArgument, "subscriber_id wajib diisi")
@@ -97,12 +100,13 @@ func (s *Server) Unsubscribe(_ context.Context, req *enginev1.UnsubscribeRequest
 		s.reg.RemoveSymbols(id, sanitize(req.GetSymbols()))
 	}
 
-	s.log.Info("pelanggan mencabut langganan", "subscriber", id, "symbols", req.GetSymbols())
+	log.Info("pelanggan mencabut langganan", "evt", "unsubscribe.ok", "subscriber", id, "symbols", req.GetSymbols())
 	return &enginev1.SubscribeResponse{Ok: true, Message: "langganan dicabut"}, nil
 }
 
 // StreamEvents mengalirkan sinyal dan status pasar sampai klien terputus.
 func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.EngineService_StreamEventsServer) error {
+	log := loggerDenganTrace(stream.Context(), s.log)
 	id := req.GetSubscriberId()
 	if id == "" {
 		return status.Error(codes.InvalidArgument, "subscriber_id wajib diisi")
@@ -132,7 +136,7 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 		}
 		s.mu.Unlock()
 		s.reg.Remove(id)
-		s.log.Info("stream pelanggan berakhir", "subscriber", id)
+		log.Info("stream pelanggan berakhir", "evt", "stream.end", "subscriber", id)
 	}()
 
 	// Kirim status pasar lebih dulu agar Runner tidak salah menahan sinyal.
