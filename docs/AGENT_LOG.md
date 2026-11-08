@@ -242,6 +242,82 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-09] PERBAIKAN — Log pindah ke folder asli VPS, tahan container dihapus
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+---
+
+#### Masalah
+
+Log ditulis ke **named volume** Docker (`log_data`). Isinya memang tidak hilang
+saat container dibuat ulang, tetapi:
+
+- berkasnya berada di `/var/lib/docker/volumes/.../_data/`, bukan di folder
+  yang dicari orang saat insiden
+- setiap pembacaan butuh `docker exec`
+- `backup.sh` tidak bisa mengambilnya tanpa trik tambahan
+
+#### Perbaikan
+
+Named volume diganti **bind mount** ke folder asli di VPS:
+
+```yaml
+volumes:
+  - ${LOG_DIR_HOST:-/var/log/ila}:/var/log/ila
+```
+
+| Hal | Sebelum | Sesudah |
+|---|---|---|
+| Lokasi di VPS | `/var/lib/docker/volumes/...` | **`/var/log/ila/YYYY/MM/DD/`** |
+| Container dihapus | tetap | tetap |
+| `docker compose down -v` | tetap | tetap |
+| Baca log | `docker exec` | `cat` langsung |
+| Backup | tidak ikut | ikut, arsip mingguan |
+
+#### Izin tulis
+
+Container berjalan sebagai `app`. UID-nya sekarang dikunci di `1001` agar
+pemilik folder di host bisa diprediksi; dengan UID acak, `chown` tidak bisa
+mengandalkan nilai tertentu.
+
+Wajib sekali sebelum deploy pertama:
+
+```bash
+sudo ./scripts/siapkan-log.sh
+```
+
+Tanpa itu container tidak bisa menulis dan kegagalannya hanya terlihat sebagai
+error tulis saat runtime.
+
+#### Backup ikut log
+
+`scripts/backup.sh` kini mengarsipkan `/var/log/ila` menjadi `tar.gz` pada hari
+Minggu, retensi mengikuti salinan mingguan database. Alasannya: berkas di host
+memang aman dari container, tetapi **tidak** dari disk VPS yang rusak.
+
+#### Verifikasi
+
+| Uji | Hasil |
+|---|---|
+| Container `--rm` menulis lalu dihapus | ✅ berkas tetap ada di host |
+| `docker compose down -v --remove-orphans` | ✅ berkas tetap ada |
+| Tulis sebagai UID 1001 setelah penyiapan | ✅ berhasil |
+| `docker compose config` | ✅ 3 bind mount, `log_data` hilang |
+| `bash -n` pada 3 skrip | ✅ |
+| `go test ./...` (platform) | ✅ 24 paket |
+
+#### Catatan untuk Hermes
+
+- **Engine di VPS 1 sudah benar sejak awal**: log ke path asli
+  `/opt/data/ila-engine/logs/`, tanpa container. Tidak ada yang berubah di sana.
+- Format & retensi tidak berubah: 7 hari / 150 MB di VPS 1, 30 hari / 1 GB di
+  VPS 2.
+- Dokumentasi lokasi log ada di `docs/RUNBOOK.md` bagian **0**.
+
+---
+
 ### [2026-11-09] INFRASTRUKTUR — Log harian JSONL, retensi otomatis, kirim ke platform, tutup kebocoran error
 - **Pelaku:** Claude
 - **Tipe:** FITUR + PERBAIKAN
