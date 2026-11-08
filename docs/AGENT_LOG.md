@@ -242,6 +242,75 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-08] FITUR — Engine menjadi produsen sinyal gRPC (rules trading tidak disentuh)
+- **Pelaku:** Claude
+- **Tipe:** FITUR
+- **Status:** 🟢 SELESAI (S1–S6); S7–S9 belum
+- **Ringkasan:**
+  - Engine kini punya server gRPC yang hidup terus dan menerbitkan sinyal
+    sesuai kontrak `plans/08`. Scanner lama tetap ada dan tetap bisa
+    mengeksekusi (flag `-execute` menyusul, lihat S7).
+  - **`pkg/ila`, `pkg/sequence`, `pkg/keylevels`, `pkg/quarterly`, `pkg/ssmt`,
+    `pkg/stdev`, `pkg/risk`, `pkg/indicators` TIDAK DISENTUH.** Diverifikasi
+    dengan `git diff --stat pkg/` yang kosong.
+- **File terdampak (baru):**
+  - `internal/market/` — satu sumber jam pasar (menggantikan 2 salinan)
+  - `internal/signal/` — TTL, supersede, cancel, expire
+  - `internal/engine/` — registry pelanggan, publisher, adapter ILA 2.0 & 3.0
+  - `internal/grpcserver/` — 5 RPC + mTLS
+  - `cmd/engine/` — binary server gRPC
+  - `proto/engine/v1/`, `gen/engine/v1/`
+- **File terdampak (diubah):**
+  - `cmd/scanner/main.go`, `cmd/ila3-scanner/main.go` — memakai
+    `market.IsClosed`/`market.Session`; duplikasi dihapus (−67 baris)
+  - `cmd/scanner/market_gate_test.go`, `cmd/ila3-scanner/market_gate_test.go`
+  - `go.mod`/`go.sum` — menambah `google.golang.org/grpc`
+
+- **Apa yang berubah di engine:**
+  1. **Satu sumber jam pasar.** Dulu `isMarketClosed` disalin di dua scanner.
+     Sekarang `internal/market`. Aturan tidak berubah satu angka pun (Jumat
+     ≥21:00 UTC, rollover 22:00–01:00, Sabtu–Minggu) dan dikunci tes tabel.
+  2. **Siklus hidup sinyal.** TTL = 1 candle LTF (H4=4j, H1=1j, M15=15m,
+     M5=5m). Sinyal baru pada slot sama → `SUPERSEDED`. Struktur batal →
+     `CANCELLED`. Lewat TTL → `EXPIRED`.
+  3. **Engine berhenti menghitung lot.** Tidak ada `calcLot`, tidak ada
+     `GetAccountInfo` untuk sizing, tidak ada fallback ekuitas. Engine hanya
+     meneruskan entry/SL/TP dari evaluator.
+  4. **Simbol diminta Runner.** `Subscribe`/`Unsubscribe`/`Snapshot` sudah
+     jalan. Simbol dari beberapa pelanggan digabung, jadi satu simbol
+     dievaluasi sekali untuk semua.
+
+- **Verifikasi:**
+  - `go build ./...` BERSIH, `go vet ./...` BERSIH.
+  - 13 paket tes lulus. `pkg/marketfeed` gagal karena butuh jaringan Binance
+    (sudah begitu sebelum perubahan ini).
+  - Uji gRPC langsung: subscribe, snapshot, ack, unsubscribe, stream — semua
+    merespons benar.
+  - Uji integrasi dengan Runner sungguhan: sinyal terbit → tersimpan di tabel
+    `signal` → diteruskan ke `user_signal`.
+
+- **Bug yang ditemukan saat uji integrasi (di sisi Runner, sudah diperbaiki):**
+  1. `ListUsersBySymbol` memakai JOIN tanpa kutip ke `"user"`. `user` adalah
+     kata kunci PostgreSQL, jadi query gagal dan **tidak ada user pernah
+     menerima sinyal**. Tidak terlihat di SQLite.
+  2. `Subscription.IsActive` bertag `default:true` sehingga GORM menimpa nilai
+     `false` menjadi `true` — langganan yang dicabut hidup lagi.
+
+- **Belum dikerjakan (WAJIB, jangan lupa):**
+  - **S7** — flag `-execute` di `cmd/scanner` & `cmd/ila3-scanner` agar bisa
+    dimatikan saat Runner sudah mengambil alih eksekusi.
+  - **S8** — Runner perlu memanggil `Subscribe`/`Unsubscribe` berkala. Saat ini
+    simbol hanya dihitung sekali saat koneksi dibuka, jadi user baru butuh
+    restart Runner.
+  - **S9** — hapus sisa BBMA (fungsi tabel masih ada walau flag `false`).
+  - ILA 3.0 baru sampai tahap adapter; belum diuji dengan data pasar nyata.
+
+- **Cara menjalankan:**
+  ```bash
+  go run ./cmd/engine -addr :9090 -strategy ila-2.0 -symbols XAUUSD
+  go run ./cmd/engine -addr :9090 -demo   # evaluator tiruan, untuk uji alur
+  ```
+
 ### [2026-11-07] PERBAIKAN MARKET GATE — Tambah Proteksi Friday Market Close (Jumat >= 20:00 UTC / 03:00 WIB)
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN

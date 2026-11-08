@@ -19,3 +19,12 @@ monitor_state*.json
 .idea/
 .vscode/
 *.swp
+
+# Rancangan arsitektur (draft, tidak di-track)
+plans/
+
+# Sertifikat & secret
+*.crt
+*.key
+*.pem
+certs/

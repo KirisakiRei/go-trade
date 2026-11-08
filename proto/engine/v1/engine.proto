@@ -1,0 +1,252 @@
+syntax = "proto3";
+
+package engine.v1;
+
+option go_package = "ila-engine/gen/engine/v1;enginev1";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------------------------
+// ENUM
+// ---------------------------------------------------------------------------
+
+enum SignalStatus {
+  SIGNAL_STATUS_UNSPECIFIED = 0;
+  WAIT_HTF_SWEEP            = 1;
+  WAIT_HTF_CANDLE_CLOSE     = 2;
+  WAIT_LTF_CISD             = 3;
+  READY_TO_ENTRY            = 4;
+  INVALIDATED               = 5;
+
+  // ILA 3.0. Nomor 6 dst. sengaja baru agar kontrak lama tidak berubah.
+  // Runner mengeksekusi HANYA pada READY_TO_ENTRY / READY_ENTRY_1 / READY_ENTRY_2;
+  // status WAIT_ILA3_* hanya untuk tampilan.
+  WAIT_ILA3_HTF_KEY_LEVEL = 6;
+  WAIT_ILA3_MTF_REVERSAL  = 7;
+  WAIT_ILA3_LTF_CISD_1    = 8;
+  READY_ENTRY_1           = 9;
+  ILA3_EXPANSION_1_ACTIVE = 10;
+  WAIT_ILA3_MTF_FVG_RETR  = 11;
+  WAIT_ILA3_LTF_CISD_2    = 12;
+  READY_ENTRY_2           = 13;
+  ILA3_EXPANSION_2_ACTIVE = 14;
+  ILA3_TARGET_REACHED     = 15;
+}
+
+enum SignalAction {
+  SIGNAL_ACTION_UNSPECIFIED = 0;
+  SIGNAL_ACTION_PUBLISH     = 1;
+  SIGNAL_ACTION_CANCEL      = 2;
+  SIGNAL_ACTION_EXPIRE      = 3;
+  SIGNAL_ACTION_SUPERSEDE   = 4;
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  BUY                   = 1;
+  SELL                  = 2;
+}
+
+// ---------------------------------------------------------------------------
+// STRUKTUR PENDUKUNG
+// ---------------------------------------------------------------------------
+
+message FairValueGap {
+  string type          = 1;
+  double top           = 2;
+  double bottom        = 3;
+  google.protobuf.Timestamp candle3_time = 4;
+  bool   mitigated     = 5;
+}
+
+message CandleInfo {
+  google.protobuf.Timestamp timestamp = 1;
+  double open      = 2;
+  double high      = 3;
+  double low       = 4;
+  double close     = 5;
+  bool   is_closed = 6;
+}
+
+message HTFSweepInfo {
+  bool   detected          = 1;
+  bool   sweep_in_progress = 2;
+  string direction         = 3;
+  FairValueGap fvg         = 4;
+  CandleInfo sweep_candle  = 5;
+  CandleInfo swept_candle  = 6;
+  google.protobuf.Timestamp sweep_time = 7;
+  double stop_loss         = 8;
+  double target_dol        = 9;
+  string details           = 10;
+}
+
+message CISDInfo {
+  bool   detected        = 1;
+  string direction       = 2;
+  CandleInfo ref_candle  = 3;
+  CandleInfo break_candle = 4;
+  google.protobuf.Timestamp break_time = 5;
+  double cisd_level      = 6;
+  double extreme_sl      = 7;
+  double entry_price     = 8;
+  string details         = 9;
+}
+
+// ---------------------------------------------------------------------------
+// SINYAL UTAMA
+// ---------------------------------------------------------------------------
+
+message Signal {
+  string signal_id = 1;
+  string symbol    = 2;
+  string htf       = 3;
+  string ltf       = 4;
+
+  SignalStatus status = 5;
+  SignalAction action = 6;
+
+  Direction direction = 7;
+  double entry_price  = 8;
+  double stop_loss    = 9;
+  double take_profit  = 10;
+  double risk_reward  = 11;
+
+  google.protobuf.Timestamp published_at = 12;
+  google.protobuf.Timestamp expires_at   = 13;
+
+  string summary       = 14;
+  string next_action   = 15;
+  bool   passed_min_rr = 16;
+
+  HTFSweepInfo htf_sweep = 17;
+  CISDInfo     cisd      = 18;
+
+  string engine_version   = 19;
+  string strategy_version = 20;
+
+  // Detail khusus ILA 3.0. Kosong untuk ILA 2.0.
+  string setup_type     = 21;  // ENTRY_1_REVERSAL | ENTRY_2_RETRACE | NONE
+  string sequence_state = 22;  // nama state asli, mis. WAIT_ILA3_MTF_REVERSAL
+  double final_zone_tp  = 23;  // target StDev -3.5 s.d. -4.0
+  double critical_zone_tp = 24; // target StDev -2.0 s.d. -2.5
+  string quarter_info   = 25;  // ringkasan Quarterly Theory
+  string ssmt_result    = 26;  // ringkasan SMT
+}
+
+message SignalUpdate {
+  string signal_id = 1;
+  SignalAction action = 2;
+  string reason = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string superseded_by = 5;
+}
+
+// ---------------------------------------------------------------------------
+// STATUS PASAR
+// ---------------------------------------------------------------------------
+
+enum MarketState {
+  MARKET_STATE_UNSPECIFIED  = 0;
+  MARKET_OPEN               = 1;
+  MARKET_CLOSED             = 2;
+  MARKET_ROLLOVER_BLACKOUT  = 3;
+}
+
+message MarketStateEvent {
+  MarketState state = 1;
+  string detail = 2;
+  google.protobuf.Timestamp at = 3;
+  string session_name = 4;
+}
+
+message Heartbeat {
+  google.protobuf.Timestamp at = 1;
+  string engine_version = 2;
+  int32  active_signals = 3;
+}
+
+// ---------------------------------------------------------------------------
+// EVENT ENVELOPE
+// ---------------------------------------------------------------------------
+
+message EngineEvent {
+  oneof payload {
+    Signal           signal        = 1;
+    SignalUpdate     signal_update = 2;
+    MarketStateEvent market_state  = 3;
+    Heartbeat        heartbeat     = 4;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SUBSCRIBE / UNSUBSCRIBE
+// ---------------------------------------------------------------------------
+
+message SubscribeRequest {
+  string subscriber_id = 1;
+  repeated string symbols = 2;
+  repeated Pair pairs = 3;
+  bool want_status_updates = 4;
+}
+
+message Pair {
+  string htf = 1;
+  string ltf = 2;
+}
+
+message UnsubscribeRequest {
+  string subscriber_id = 1;
+  repeated string symbols = 2;
+}
+
+message SubscribeResponse {
+  bool ok = 1;
+  repeated string accepted_symbols = 2;
+  repeated string rejected_symbols = 3;
+  string message = 4;
+}
+
+// ---------------------------------------------------------------------------
+// ACK
+// ---------------------------------------------------------------------------
+
+message AckRequest {
+  string signal_id = 1;
+  string subscriber_id = 2;
+  google.protobuf.Timestamp received_at = 3;
+}
+
+message AckResponse {
+  bool   ok = 1;
+  string signal_id = 2;
+  string message = 3;
+}
+
+// ---------------------------------------------------------------------------
+// SNAPSHOT (D19: sinkronisasi saat reconnect)
+// ---------------------------------------------------------------------------
+
+message SnapshotRequest {
+  string subscriber_id = 1;
+  repeated string symbols = 2;
+}
+
+message SnapshotResponse {
+  repeated Signal signals = 1;
+  MarketStateEvent market_state = 2;
+  google.protobuf.Timestamp taken_at = 3;
+  string engine_version = 4;
+}
+
+// ---------------------------------------------------------------------------
+// SERVICE
+// ---------------------------------------------------------------------------
+
+service EngineService {
+  rpc Subscribe(SubscribeRequest) returns (SubscribeResponse);
+  rpc Unsubscribe(UnsubscribeRequest) returns (SubscribeResponse);
+  rpc StreamEvents(SubscribeRequest) returns (stream EngineEvent);
+  rpc AckSignal(AckRequest) returns (AckResponse);
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+}

@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"ila-engine/internal/market"
 	"ila-engine/internal/model"
 	"ila-engine/internal/repository"
 	"ila-engine/pkg/broker"
@@ -69,21 +70,6 @@ func saveState(s MonitorState) {
 	if err == nil {
 		_ = os.WriteFile(StateFilePath, data, 0644)
 	}
-}
-
-// isMarketClosed: weekend (Sabtu/Minggu penuh atau Jumat >= 21:00 UTC) atau rollover 22:00-01:00 UTC.
-func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
-	if utcDay == time.Saturday || utcDay == time.Sunday {
-		return true
-	}
-	// Jumat >= 21:00 UTC (04:00 WIB Sabtu): margin 1 jam sebelum penutupan akhir pekan.
-	if utcDay == time.Friday && utcHour >= 21 {
-		return true
-	}
-	if utcHour >= 22 || utcHour < 1 {
-		return true
-	}
-	return false
 }
 
 func getSymbolDisplay(sym string) (string, string) {
@@ -265,7 +251,7 @@ func main() {
 	nowUtc := time.Now().UTC()
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
-	if isMarketClosed(utcDay, utcHour) {
+	if market.IsClosed(utcDay, utcHour) {
 		if len(messages) > 0 {
 			fmt.Println(strings.Join(messages, "\n\n---\n\n"))
 		}

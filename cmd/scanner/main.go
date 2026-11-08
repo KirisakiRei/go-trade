@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ila-engine/internal/dto"
+	"ila-engine/internal/market"
 	"ila-engine/internal/model"
 	"ila-engine/internal/repository"
 	"ila-engine/internal/service"
@@ -229,33 +230,6 @@ func cleanSessionName(sess string) string {
 	s = strings.ReplaceAll(s, "ROLLOVER_BLACKOUT", "Jeda Rollover")
 	s = strings.ReplaceAll(s, "WEEKEND_CLOSED", "Libur Akhir Pekan")
 	return s
-}
-
-func isActiveSession(sess string) bool {
-	actives := []string{"ASIAN_SESSION", "LONDON_SESSION", "LONDON_NEWYORK_OVERLAP", "NEWYORK_SESSION"}
-	for _, a := range actives {
-		if strings.Contains(sess, a) {
-			return true
-		}
-	}
-	return false
-}
-
-// isMarketClosed: weekend (Sabtu/Minggu penuh atau Jumat >= 21:00 UTC) atau rollover 22:00-01:00 UTC.
-func isMarketClosed(utcDay time.Weekday, utcHour int) bool {
-	if utcDay == time.Saturday || utcDay == time.Sunday {
-		return true
-	}
-	// Jumat >= 21:00 UTC (04:00 WIB Sabtu): margin 1 jam sebelum penutupan akhir pekan,
-	// menghindari spread melebar tanpa memotong sesi New York.
-	if utcDay == time.Friday && utcHour >= 21 {
-		return true
-	}
-	// Rollover subuh: 22:00 - 01:00 UTC (05:00 - 08:00 WIB).
-	if utcHour >= 22 || utcHour < 1 {
-		return true
-	}
-	return false
 }
 
 func determineNextAction(grade, bias, m15Ph, m15St string, rr float64) string {
@@ -625,27 +599,12 @@ func main() {
 	nowUtc := time.Now().UTC()
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
-	marketClosed := isMarketClosed(utcDay, utcHour)
-	isRollover := utcHour >= 22 || utcHour < 1     // 05:00 - 08:00 WIB
-	isOverlap := (utcHour >= 12 && utcHour < 17)   // 19:00 - 00:00 WIB
-	isLondonOnly := (utcHour >= 7 && utcHour < 12) // 14:00 - 19:00 WIB
-	isNYOnly := (utcHour >= 17 && utcHour < 22)    // 00:00 - 05:00 WIB
-
-	currentSession := "ASIAN_SESSION"
-	if marketClosed {
-		currentSession = "WEEKEND_CLOSED"
-	} else if isRollover {
-		currentSession = "ROLLOVER_BLACKOUT"
-	} else if isOverlap {
-		currentSession = "LONDON_NEWYORK_OVERLAP"
-	} else if isLondonOnly {
-		currentSession = "LONDON_SESSION"
-	} else if isNYOnly {
-		currentSession = "NEWYORK_SESSION"
-	}
+	// Jam pasar dipakai dari satu sumber agar ILA 2.0 dan 3.0 tidak berbeda.
+	marketClosed := market.IsClosed(utcDay, utcHour)
+	currentSession := market.Session(utcDay, utcHour)
 
 	lastSession := state.LastSession
-	inActiveSession := isActiveSession(currentSession)
+	inActiveSession := market.IsActiveSession(currentSession)
 
 	// Session Transition Briefing
 	if inActiveSession && currentSession != lastSession {

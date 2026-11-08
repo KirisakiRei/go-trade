@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"ila-engine/internal/market"
 )
 
 // Market tutup: Sabtu/Minggu penuh, Jumat >= 21:00 UTC, dan rollover 22:00-01:00 UTC.
@@ -23,8 +25,8 @@ func TestIsMarketClosedILA3(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		if got := isMarketClosed(c.day, c.hour); got != c.want {
-			t.Errorf("%s: isMarketClosed(%v, %d) = %v, want %v", c.name, c.day, c.hour, got, c.want)
+		if got := market.IsClosed(c.day, c.hour); got != c.want {
+			t.Errorf("%s: market.IsClosed(%v, %d) = %v, want %v", c.name, c.day, c.hour, got, c.want)
 		}
 	}
 }
