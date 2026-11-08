@@ -2,13 +2,6 @@ package dto
 
 import "time"
 
-type TradeExecutionRequest struct {
-	Symbol    string  `json:"symbol" binding:"required"`
-	RiskRatio float64 `json:"risk_ratio,default=1.0"` // Risk % of equity
-	MinRR     float64 `json:"min_rr,default=2.0"`     // Minimal 1:2 R:R
-	Force     bool    `json:"force"`                  // Bypass daily loss lock for manual testing
-}
-
 type TradeExecutionResult struct {
 	Executed        bool      `json:"executed"`
 	Strategy        string    `json:"strategy,omitempty"`
@@ -28,22 +21,22 @@ type TradeExecutionResult struct {
 }
 
 type PositionResponse struct {
-	ID           string     `json:"id"`
-	TicketNumber string     `json:"ticket_number"`
-	Symbol       string     `json:"symbol"`
-	Direction    string     `json:"direction"`
-	OpenPrice    float64    `json:"open_price"`
-	StopLoss     float64    `json:"stop_loss"`
-	TakeProfit   float64    `json:"take_profit"`
-	LotSize      float64    `json:"lot_size"`
-	RiskReward   float64    `json:"risk_reward"`
-	Status       string     `json:"status"`
-	ExitPrice    float64    `json:"exit_price"`
-	ProfitLoss   float64    `json:"profit_loss"`
-	OutcomeR     float64    `json:"outcome_r"`
-	OpenedAt     string     `json:"opened_at"`
-	ClosedAt     *string    `json:"closed_at,omitempty"`
-	Notes        string     `json:"notes"`
+	ID           string  `json:"id"`
+	TicketNumber string  `json:"ticket_number"`
+	Symbol       string  `json:"symbol"`
+	Direction    string  `json:"direction"`
+	OpenPrice    float64 `json:"open_price"`
+	StopLoss     float64 `json:"stop_loss"`
+	TakeProfit   float64 `json:"take_profit"`
+	LotSize      float64 `json:"lot_size"`
+	RiskReward   float64 `json:"risk_reward"`
+	Status       string  `json:"status"`
+	ExitPrice    float64 `json:"exit_price"`
+	ProfitLoss   float64 `json:"profit_loss"`
+	OutcomeR     float64 `json:"outcome_r"`
+	OpenedAt     string  `json:"opened_at"`
+	ClosedAt     *string `json:"closed_at,omitempty"`
+	Notes        string  `json:"notes"`
 }
 
 type PendingSignal struct {

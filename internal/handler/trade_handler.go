@@ -23,28 +23,6 @@ func NewTradeHandler(executionService service.ExecutionService, evaluationServic
 	}
 }
 
-func (h *TradeHandler) Execute(c *gin.Context) {
-	var req dto.TradeExecutionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid trade execution payload", err.Error())
-		return
-	}
-
-	res, err := h.executionService.EvaluateAndExecute(c.Request.Context(), req)
-	if err != nil {
-		status, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, status, code, err.Error(), nil)
-		return
-	}
-
-	if !res.Executed {
-		httpx.OK(c, "Trade evaluation completed: order rejected by quality gate", res)
-		return
-	}
-
-	httpx.Created(c, "Position successfully opened", res)
-}
-
 func (h *TradeHandler) ExecuteILA(c *gin.Context) {
 	var req dto.ILA2ExecuteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -31,7 +31,6 @@ func main() {
 	format := flag.String("format", "text", "Output format: text or json")
 	execute := flag.Bool("execute", false, "Evaluate quality gate and execute order on demo account")
 	eval := flag.Bool("eval", false, "Display post-mortem trade evaluations and self-learning summary")
-	ila := flag.Bool("ila", true, "Run Imaginary Liquidity (ILA) evaluation on paired timeframes (default: true)")
 	htf := flag.String("htf", "", "High Timeframe for ILA (leave empty to scan all 4 paired timeframes)")
 	ltf := flag.String("ltf", "", "Low Timeframe for ILA (leave empty to scan all 4 paired timeframes)")
 	force := flag.Bool("force", false, "Force execution bypassing daily loss lock")
@@ -50,9 +49,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error opening db: %v\n", err)
 			os.Exit(1)
 		}
-		_ = db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
-		setupRepo := repository.NewSetupRepository(db)
-		_ = setupRepo
+		_ = db.AutoMigrate(&model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
 		journalRepo := repository.NewJournalRepository(db)
 		positionRepo := repository.NewPositionRepository(db)
 		evalRepo := repository.NewEvaluationRepository(db)
@@ -60,34 +57,24 @@ func main() {
 		cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
 		mtrBroker := broker.NewMatchTraderBroker("")
 		var tradeBroker broker.Broker = broker.NewMultiBrokerManager(mtrBroker, cTraderBroker)
-		execService := service.NewExecutionService(nil, ilaService, evalService, positionRepo, journalRepo, tradeBroker, feed)
+		execService := service.NewExecutionService(ilaService, evalService, positionRepo, journalRepo, tradeBroker, feed)
 
-		var res *dto.TradeExecutionResult
-		if *ila {
-			targetHTF := *htf
-			targetLTF := *ltf
-			if targetHTF == "" {
-				targetHTF = "H4"
-			}
-			if targetLTF == "" {
-				targetLTF = "M15"
-			}
-			res, err = execService.EvaluateAndExecuteILA(ctx, dto.ILA2ExecuteRequest{
-				Symbol:    *symbol,
-				HTF:       targetHTF,
-				LTF:       targetLTF,
-				RiskRatio: 1.0,
-				MinRR:     2.0,
-				Force:     *force,
-			})
-		} else {
-			res, err = execService.EvaluateAndExecute(ctx, dto.TradeExecutionRequest{
-				Symbol:    *symbol,
-				RiskRatio: 1.0,
-				MinRR:     2.0,
-				Force:     *force,
-			})
+		targetHTF := *htf
+		targetLTF := *ltf
+		if targetHTF == "" {
+			targetHTF = "H4"
 		}
+		if targetLTF == "" {
+			targetLTF = "M15"
+		}
+		res, err := execService.EvaluateAndExecuteILA(ctx, dto.ILA2ExecuteRequest{
+			Symbol:    *symbol,
+			HTF:       targetHTF,
+			LTF:       targetLTF,
+			RiskRatio: 1.0,
+			MinRR:     2.0,
+			Force:     *force,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Execution error: %v\n", err)
 			os.Exit(1)
@@ -120,166 +107,6 @@ func main() {
 		return
 	}
 
-	if *ila {
-		ilaService := service.NewILA2Service(feed)
-
-		if *htf == "" && *ltf == "" {
-			multi, err := ilaService.AnalyzeAllPairs(ctx, *symbol)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error analyzing all ILA pairs: %v\n", err)
-				os.Exit(1)
-			}
-
-			if *format == "json" {
-				out, _ := json.MarshalIndent(multi, "", "  ")
-				fmt.Println(string(out))
-				return
-			}
-
-			fmt.Println("🎯 IMAGINARY LIQUIDITY (ILA) - 4 PAIRED TIMEFRAMES")
-			fmt.Printf("Simbol: %s | Sumber: FOREX.com (TradingView)\n\n", multi.Symbol)
-
-			fmt.Println("┌───────────┬─────────┬──────────────────────┐")
-			fmt.Println("│ Pasangan  │  Arah   │        Status        │")
-			fmt.Println("├───────────┼─────────┼──────────────────────┤")
-			for _, p := range multi.Pairs {
-				setup := p.Setup
-				dirBadge := "⚪ Netr"
-				if setup.Bias == "BULLISH" {
-					dirBadge = "🟢 Buy "
-				} else if setup.Bias == "BEARISH" {
-					dirBadge = "🔴 Sell"
-				}
-
-				stBadge := "⏳ Menunggu"
-				if setup.Status == "READY_TO_ENTRY" {
-					stBadge = "🎯 Siap Entry"
-				} else if setup.Status == "WAIT_HTF_CANDLE_CLOSE" {
-					stBadge = fmt.Sprintf("⏳ Tunggu Close %s", p.HTF)
-				} else if setup.Status == "WAIT_LTF_CISD" {
-					stBadge = "⏳ Tunggu CISD"
-				} else if setup.Status == "WAIT_HTF_SWEEP" {
-					stBadge = "⏳ Tunggu Sweep"
-				} else if setup.Status == "INVALIDATED" {
-					stBadge = "🛑 Batal (Invalid)"
-				}
-
-				pNamePad := p.PairName + strings.Repeat(" ", 9-len([]rune(p.PairName)))
-				stPad := stBadge + strings.Repeat(" ", 20-len([]rune(stBadge)))
-				fmt.Printf("│ %s │ %s │ %s │\n", pNamePad, dirBadge, stPad)
-			}
-			fmt.Println("└───────────┴─────────┴──────────────────────┘")
-			fmt.Println()
-
-			for i, p := range multi.Pairs {
-				setup := p.Setup
-				statusBadge := "⏳ WAIT HTF SWEEP"
-				if setup.Status == "READY_TO_ENTRY" {
-					statusBadge = "🎯 READY TO ENTRY"
-				} else if setup.Status == "WAIT_LTF_CISD" {
-					statusBadge = "⏳ WAIT LTF CISD"
-				} else if setup.Status == "WAIT_HTF_CANDLE_CLOSE" {
-					statusBadge = "⏳ WAIT HTF CLOSE (Belum Ganti Candle)"
-				}
-
-				dirBadge := "⚪ Netral"
-				if setup.Bias == "BULLISH" {
-					dirBadge = "🟢 Bullish"
-				} else if setup.Bias == "BEARISH" {
-					dirBadge = "🔴 Bearish"
-				}
-
-				fmt.Printf("[%d] %s (%s) ➡️ %s\n", i+1, p.PairName, dirBadge, statusBadge)
-
-				if setup.HTFSweep != nil {
-					fmt.Printf("    • HTF (%s): %s\n", p.HTF, setup.HTFSweep.Details)
-				}
-				if setup.CISD != nil && setup.CISD.Detected {
-					fmt.Printf("    • LTF (%s): %s\n", p.LTF, setup.CISD.Details)
-				} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
-					fmt.Printf("    • LTF (%s): %s\n", p.LTF, setup.CISD.Details)
-				} else if setup.Status == "WAIT_LTF_CISD" {
-					fmt.Printf("    • LTF (%s): Menunggu pembentukan CISD (Body break Body)\n", p.LTF)
-				}
-
-				if setup.Status == "READY_TO_ENTRY" {
-					fmt.Printf("    • Rencana: Entry=%.5f | SL=%.5f | TP=%.5f | R:R=1:%.2f\n",
-						setup.EntryPrice, setup.StopLoss, setup.TakeProfit, setup.RiskReward)
-				}
-				fmt.Println()
-			}
-
-			fmt.Println("==================================================")
-			fmt.Printf("📋 Ringkasan: %s\n", multi.Summary)
-			return
-		}
-
-		setup, err := ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
-			Symbol: *symbol,
-			HTF:    *htf,
-			LTF:    *ltf,
-			Limit:  *limit,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error analyzing ILA: %v\n", err)
-			os.Exit(1)
-		}
-
-		if *format == "json" {
-			out, _ := json.MarshalIndent(setup, "", "  ")
-			fmt.Println(string(out))
-			return
-		}
-
-		fmt.Println("🎯 IMAGINARY LIQUIDITY (ILA) ANALYSIS")
-		fmt.Println("==================================================")
-		fmt.Printf("• Pasangan Timeframe : %s (HTF) ➡️ %s (LTF)\n", setup.HTF, setup.LTF)
-		fmt.Printf("• Simbol Instrumen   : %s\n", setup.Symbol)
-		fmt.Printf("• Bias Arah          : %s\n", setup.Bias)
-		fmt.Printf("• Status Evaluasi    : %s\n\n", setup.Status)
-
-		if setup.HTFSweep != nil && setup.HTFSweep.Detected {
-			fmt.Printf("🔍 HTF SWEEP INSIDE FVG (%s):\n", setup.HTF)
-			fmt.Printf("  └ %s\n", setup.HTFSweep.Details)
-			fmt.Printf("  └ Level Stop Loss : %.5f (Puncak Sweep)\n", setup.HTFSweep.StopLoss)
-			fmt.Printf("  └ Target DOL      : %.5f (Eksternal Liquidity / SSL)\n\n", setup.HTFSweep.TargetDOL)
-		} else if setup.HTFSweep != nil {
-			fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
-			if setup.HTFSweep.FVG != nil {
-				fmt.Printf("  └ Area FVG Terakhir: %.2f - %.2f (%s)\n", setup.HTFSweep.FVG.Bottom, setup.HTFSweep.FVG.Top, setup.HTFSweep.FVG.Type)
-			}
-			fmt.Printf("  └ Detail           : %s\n\n", setup.HTFSweep.Details)
-		} else {
-			fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
-			fmt.Printf("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n\n")
-		}
-
-		if setup.CISD != nil && setup.CISD.Detected {
-			fmt.Printf("⚡ LTF CISD CONFIRMATION (%s):\n", setup.LTF)
-			fmt.Printf("  └ %s\n", setup.CISD.Details)
-			fmt.Printf("  └ Waktu Tembus    : %s\n\n", setup.CISD.BreakTime.Format("2006-01-02 15:04"))
-		} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
-			fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-			fmt.Printf("  └ Level CISD Acuan: %.5f (Origin deretan opposing leg)\n", setup.CISD.CISDLevel)
-			fmt.Printf("  └ Level SL Terkini: %.5f (Low/High Candle 5)\n", setup.CISD.ExtremeSL)
-			fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
-		} else {
-			fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-			fmt.Printf("  └ Menunggu konfirmasi CISD (Body break Body).\n\n")
-		}
-
-		if setup.Status == "READY_TO_ENTRY" {
-			fmt.Println("🚀 RENCANA EKSEKUSI (READY TO ENTRY):")
-			fmt.Printf("• Harga Entry : %.5f (Next candle open)\n", setup.EntryPrice)
-			fmt.Printf("• Stop Loss   : %.5f\n", setup.StopLoss)
-			fmt.Printf("• Take Profit : %.5f (DOL)\n", setup.TakeProfit)
-			fmt.Printf("• Rasio R:R   : 1:%.2f\n", setup.RiskReward)
-		}
-
-		fmt.Printf("\n👉 Langkah Berikutnya: %s\n", setup.NextAction)
-		return
-	}
-
 	if *eval {
 		cfg := config.LoadConfig()
 		db, err := config.InitDatabase(cfg.DBPath)
@@ -287,7 +114,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error opening db: %v\n", err)
 			os.Exit(1)
 		}
-		_ = db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
+		_ = db.AutoMigrate(&model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
 		positionRepo := repository.NewPositionRepository(db)
 		evalRepo := repository.NewEvaluationRepository(db)
 		evalService := service.NewEvaluationService(evalRepo, positionRepo, feed)
@@ -359,7 +186,6 @@ func main() {
 		return
 	}
 
-	// Default action: Evaluasi ILA (4-Paired atau spesifik pair)
 	if *htf == "" && *ltf == "" {
 		multi, err := ilaService.AnalyzeAllPairs(ctx, *symbol)
 		if err != nil {
@@ -433,6 +259,13 @@ func main() {
 			}
 			if setup.CISD != nil && setup.CISD.Detected {
 				fmt.Printf("    • LTF (%s): %s\n", p.LTF, setup.CISD.Details)
+			} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
+				fmt.Printf("    • LTF (%s): %s\n", p.LTF, setup.CISD.Details)
+			} else if setup.Status == "WAIT_LTF_CISD" {
+				fmt.Printf("    • LTF (%s): Menunggu pembentukan CISD (Body break Body)\n", p.LTF)
+			}
+
+			if setup.Status == "READY_TO_ENTRY" {
 				fmt.Printf("    • Rencana: Entry=%.5f | SL=%.5f | TP=%.5f | R:R=1:%.2f\n",
 					setup.EntryPrice, setup.StopLoss, setup.TakeProfit, setup.RiskReward)
 			}
@@ -507,4 +340,5 @@ func main() {
 	}
 
 	fmt.Printf("\n👉 Langkah Berikutnya: %s\n", setup.NextAction)
+	return
 }

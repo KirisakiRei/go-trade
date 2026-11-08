@@ -21,7 +21,6 @@ import (
 )
 
 type executionService struct {
-	bbmaService    BBMAService
 	ilaService     ILA2Service
 	evalService    EvaluationService
 	positionRepo   repository.PositionRepository
@@ -33,7 +32,6 @@ type executionService struct {
 }
 
 func NewExecutionService(
-	bbmaService BBMAService,
 	ilaService ILA2Service,
 	evalService EvaluationService,
 	positionRepo repository.PositionRepository,
@@ -42,7 +40,6 @@ func NewExecutionService(
 	feed marketfeed.Provider,
 ) ExecutionService {
 	return &executionService{
-		bbmaService:    bbmaService,
 		ilaService:     ilaService,
 		evalService:    evalService,
 		positionRepo:   positionRepo,
@@ -55,234 +52,6 @@ func NewExecutionService(
 
 func (s *executionService) GetAccount(ctx context.Context) (any, error) {
 	return s.broker.GetAccountInfo(ctx)
-}
-
-func (s *executionService) EvaluateAndExecute(ctx context.Context, req dto.TradeExecutionRequest) (*dto.TradeExecutionResult, error) {
-	if req.RiskRatio <= 0 {
-		req.RiskRatio = 1.0 // 1%
-	}
-	if req.MinRR <= 0 {
-		req.MinRR = 2.0 // 1:2 R:R
-	}
-
-	result := &dto.TradeExecutionResult{
-		Symbol:     req.Symbol,
-		Strategy:   "BBMA Oma Ally",
-		Timeframe:  "H4 ➡️ H1 ➡️ M15",
-		ExecutedAt: time.Now(),
-	}
-
-	// 1. Proteksi Drawdown Harian (2 Strike & Out): Maksimal 2x SL per hari
-	if !req.Force {
-		todayLosses, err := s.positionRepo.CountTodayLosses(ctx)
-		if err == nil && todayLosses >= 2 {
-			result.Executed = false
-			result.RejectionReason = "🚨 PROTEKSI DRAWDOWN HARIAN (2 Strike & Out): Hari ini sudah mengalami 2 kali Stop Loss. Sistem mengunci trading hari ini demi menjaga batas maksimal rugi harian 5% prop firm!"
-			return result, nil
-		}
-	}
-
-	// 2. Check existing open position for this symbol
-	openPos, err := s.positionRepo.FindOpenBySymbol(ctx, req.Symbol)
-	if err == nil && len(openPos) > 0 {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Ada posisi aktif (%s %s Lot %.2f) yang belum ditutup.", openPos[0].Direction, openPos[0].Symbol, openPos[0].LotSize)
-		return result, nil
-	}
-
-	// 3. Scan MTF Confluence (H4 -> H1 -> M15)
-	mtfResp, err := s.bbmaService.AnalyzeMTF(ctx, dto.MTFAnalysisRequest{
-		Symbol: req.Symbol,
-		TF1:    "H4",
-		TF2:    "H1",
-		TF3:    "M15",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate MTF: %w", err)
-	}
-
-	// 4. Check Rollover Lock
-	if mtfResp.ConfluenceGrade == "ROLLOVER_LOCK" {
-		result.Executed = false
-		result.RejectionReason = mtfResp.Summary
-		return result, nil
-	}
-
-	// 5. Strict Confluence Grade Gate: Only GRADE_A_PLUS, GRADE_A, GRADE_A_GOLDEN, or GRADE_B_STRONG allowed
-	allowedGrades := map[string]bool{
-		"GRADE_A_PLUS":   true,
-		"GRADE_A":        true,
-		"GRADE_A_GOLDEN": true,
-		"GRADE_B_STRONG": true,
-	}
-	if !allowedGrades[mtfResp.ConfluenceGrade] {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Grade MTF (%s) belum memenuhi standar kualifikasi entry (Wajib GRADE A+ / GRADE A). Alasan: %s", mtfResp.ConfluenceGrade, mtfResp.Summary)
-		return result, nil
-	}
-
-	if mtfResp.Bias != "BULLISH" && mtfResp.Bias != "BEARISH" {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Arah bias tidak jelas (%s) atau terjadi konflik antar timeframe.", mtfResp.Bias)
-		return result, nil
-	}
-
-	// 6. Check Trigger Setup on M15
-	triggerAnalysis := mtfResp.TF3Analysis
-	if triggerAnalysis == nil || triggerAnalysis.EntryPlan == nil {
-		result.Executed = false
-		result.RejectionReason = "Tidak ditemukan Rencana Entry (Entry Plan) valid pada timeframe eksekusi M15."
-		return result, nil
-	}
-
-	// Adjust risk: Half risk for GRADE_A (outside London/NY session)
-	actualRiskRatio := req.RiskRatio
-	if mtfResp.ConfluenceGrade == "GRADE_A" {
-		actualRiskRatio = req.RiskRatio * 0.5 // Separuh risiko di sesi Asia
-	}
-
-	entryPlan := triggerAnalysis.EntryPlan
-	entryPrice := (entryPlan.EntryZone[0] + entryPlan.EntryZone[1]) / 2.0
-	sl := entryPlan.StopLoss
-	tp := entryPlan.TakeProfit
-
-	setupID := fmt.Sprintf("%s-M15-%s", req.Symbol, triggerAnalysis.AsOf)
-	result.SetupID = setupID
-
-	// 5. Hard Gate: Validate Risk & Minimum 1:2 R:R
-	accInfo, err := s.broker.GetAccountInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get account info: %w", err)
-	}
-
-	// Dynamic 1% risk based on actual account equity
-	equity := accInfo.Equity
-	if equity <= 0 {
-		equity = accInfo.Balance
-	}
-	if equity <= 0 {
-		equity = 100000.0
-	}
-
-	riskRes, err := risk.CalculateLot(equity, actualRiskRatio, entryPrice, sl, req.MinRR, tp, req.Symbol)
-	if err != nil {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Kalkulasi risiko gagal: %v", err)
-		return result, nil
-	}
-
-	if !riskRes.PassedRR {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Rasio Risk:Reward (1:%.2f) di bawah batas wajib (Minimal 1:%.2f). Entry dibatalkan demi disiplin trading.", riskRes.RiskReward, req.MinRR)
-		return result, nil
-	}
-
-	// 6. Execute Order to Broker & Enqueue for MT5 EA
-	direction := "BUY"
-	if mtfResp.Bias == "BEARISH" {
-		direction = "SELL"
-	}
-
-	sigID := uuid.New().String()
-	sig := &dto.PendingSignal{
-		ID:         sigID,
-		Symbol:     req.Symbol,
-		Direction:  direction,
-		Volume:     riskRes.LotSize,
-		OpenPrice:  entryPrice,
-		StopLoss:   sl,
-		TakeProfit: tp,
-		Comment:    fmt.Sprintf("BBMA %s", mtfResp.ConfluenceGrade),
-		CreatedAt:  time.Now(),
-	}
-	s.mu.Lock()
-	s.pendingSignals[sigID] = sig
-	s.mu.Unlock()
-
-	orderRes, err := s.broker.ExecuteOrder(ctx, broker.OrderRequest{
-		Symbol:     req.Symbol,
-		Direction:  direction,
-		OpenPrice:  entryPrice,
-		StopLoss:   sl,
-		TakeProfit: tp,
-		LotSize:    riskRes.LotSize,
-		Comment:    fmt.Sprintf("BBMA %s %s", mtfResp.ConfluenceGrade, setupID),
-		SetupID:    setupID,
-	})
-	if err != nil {
-		result.Executed = false
-		result.RejectionReason = fmt.Sprintf("Eksekusi broker gagal: %v", err)
-		return result, nil
-	}
-
-	// 7. Persist Position to Database
-	now := time.Now()
-	posRecord := &model.Position{
-		Base: model.Base{
-			ID:        uuid.New().String(),
-			CreatedAt: now,
-			UpdatedAt: now,
-		},
-		TicketNumber: orderRes.TicketNumber,
-		SetupID:      setupID,
-		Symbol:       req.Symbol,
-		Timeframe:    "M15",
-		Direction:    direction,
-		OpenPrice:    entryPrice,
-		StopLoss:     sl,
-		TakeProfit:   tp,
-		LotSize:      riskRes.LotSize,
-		RiskReward:   riskRes.RiskReward,
-		Status:       "OPEN",
-		OpenedAt:     now,
-		Notes:        fmt.Sprintf("Pola: %s | Grade: %s", mtfResp.ConfluencePattern, mtfResp.ConfluenceGrade),
-	}
-
-	if err := s.positionRepo.Create(ctx, posRecord); err != nil {
-		slog.Error("Failed to save position record", "error", err)
-	}
-
-	// 8. Record in Trade Journal
-	journal := &model.TradeJournal{
-		Base: model.Base{
-			ID:        uuid.New().String(),
-			CreatedAt: now,
-			UpdatedAt: now,
-		},
-		SetupID:     setupID,
-		Symbol:      req.Symbol,
-		Timeframe:   "M15",
-		Action:      "ORDER_FILLED",
-		State:       "POSITION_OPEN",
-		Price:       entryPrice,
-		StopLoss:    sl,
-		TakeProfit:  tp,
-		Notes:       fmt.Sprintf("Order #%s dibuka: %s %.2f lot @ %.5f (SL: %.5f, TP: %.5f, RR: 1:%.2f)", orderRes.TicketNumber, direction, riskRes.LotSize, entryPrice, sl, tp, riskRes.RiskReward),
-		EvaluatedAt: now,
-	}
-	_ = s.journalRepo.Create(ctx, journal)
-
-	slog.Info("🚀 POSISI TRADING DIEKSEKUSI 🚀",
-		"ticket", orderRes.TicketNumber,
-		"symbol", req.Symbol,
-		"direction", direction,
-		"lot", riskRes.LotSize,
-		"open", entryPrice,
-		"sl", sl,
-		"tp", tp,
-		"rr", riskRes.RiskReward,
-	)
-
-	result.Executed = true
-	result.TicketNumber = orderRes.TicketNumber
-	result.Direction = direction
-	result.LotSize = riskRes.LotSize
-	result.OpenPrice = entryPrice
-	result.StopLoss = sl
-	result.TakeProfit = tp
-	result.RiskReward = riskRes.RiskReward
-	result.RiskAmount = riskRes.RiskAmount
-	return result, nil
 }
 
 func (s *executionService) CheckAndManagePositions(ctx context.Context) error {

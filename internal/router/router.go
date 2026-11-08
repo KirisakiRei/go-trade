@@ -49,7 +49,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB) *AppComponents {
 
 	ilaService := service.NewILA2Service(feedProvider)
 	evalService := service.NewEvaluationService(evalRepo, positionRepo, feedProvider)
-	executionService := service.NewExecutionService(nil, ilaService, evalService, positionRepo, journalRepo, activeBroker, feedProvider)
+	executionService := service.NewExecutionService(ilaService, evalService, positionRepo, journalRepo, activeBroker, feedProvider)
 
 	// Backfill evaluations for any previously closed trades on startup
 	go func() {
@@ -58,7 +58,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB) *AppComponents {
 		_, _ = evalService.EvaluateAllClosedPositions(ctx)
 	}()
 
-	analysisHandler := handler.NewAnalysisHandler(nil, ilaService)
+	analysisHandler := handler.NewAnalysisHandler(ilaService)
 	tradeHandler := handler.NewTradeHandler(executionService, evalService)
 
 	// API Routes (Murni ILA)

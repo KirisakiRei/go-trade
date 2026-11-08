@@ -242,6 +242,109 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-09] PENGHAPUSAN — BBMA dikeluarkan dari engine, jalur ILA utuh
+- **Pelaku:** Claude
+- **Tipe:** PENGHAPUSAN
+- **Status:** 🟢 SELESAI
+
+---
+
+#### Latar
+
+BBMA sudah tidak dipakai. Yang berjalan sekarang hanya ILA 2.0 dan ILA 3.0.
+Sisa BBMA masih menempel di lapisan aplikasi (service, handler, DTO, model),
+sehingga membingungkan saat membaca kode dan menyisakan endpoint mati.
+
+**Batas yang dipatuhi:** `pkg/ila`, `pkg/sequence`, `pkg/keylevels`,
+`pkg/quarterly`, `pkg/ssmt`, `pkg/stdev`, `pkg/risk`, `pkg/indicators`
+**nol perubahan**. Diverifikasi `git diff --stat pkg/` (kosong, dicek ulang
+setelah semua perubahan).
+
+---
+
+#### Yang dihapus
+
+| File | Isi |
+|---|---|
+| `internal/service/bbma_service.go` | 1.013 baris rulebook BBMA |
+| `internal/service/monitor_service.go` | pemantau latar BBMA |
+| `internal/handler/monitor_handler.go` | endpoint monitor |
+| `internal/model/setup.go` | tabel `bbma_setups` |
+| `internal/repository/setup_repository.go` | CRUD `bbma_setups` |
+| `internal/dto/analysis_dto.go` | `AnalysisRequest`, `AnalysisResponse`, `MTFAnalysis*`, `EntryPlan`, `IndicatorSnapshot`, dll |
+
+Ikut dibersihkan:
+
+- `EvaluateAndExecute` (jalur eksekusi BBMA) — 231 baris
+- `TradeHandler.Execute` dan rute `POST /api/v1/trade/execute`
+- `AnalysisHandler.Analyze`, `ListSetups`, `AnalyzeMTF` beserta rutenya
+- `BBMAService`, `MonitorService`, `SetupRepository` dari interface
+- Cabang non-ILA di `evaluation_service.go` (taksomi root cause BBMA)
+- Flag `-ila` di `cmd/cli` yang nilainya sudah selalu `true`
+
+Total **-2.122 baris**, dengan +76 baris pengganti.
+
+---
+
+#### Yang TIDAK dihapus (sengaja)
+
+- **`pkg/indicators` beserta `CalculateBBMA`** — ini area rules. ILA tetap
+memakai tipe `indicators.Candle` dari paket yang sama, jadi tidak boleh disentuh.
+- **Pelabelan historis di `evaluation_service.go`** (`isILA`, `setupType`, `MHV`,
+`EXTREME`, `CSAK`) — menjaga posisi lama di database tetap terbaca benar.
+
+---
+
+#### Endpoint sekarang
+
+| Metode | Path | Status |
+|---|---|---|
+| GET | `/api/v1/analysis/ila` | ✅ tetap |
+| POST | `/api/v1/trade/execute/ila` | ✅ tetap |
+| GET | `/api/v1/trade/positions` \| `account` \| `evaluations` \| `evaluations/stats` | ✅ tetap |
+| GET | `/api/v1/analysis/mtf` \| `/analysis/setups` | ❌ dihapus |
+| POST | `/api/v1/trade/execute` | ❌ dihapus |
+
+---
+
+#### Verifikasi
+
+| Uji | Hasil |
+|---|---|
+| `go build ./...` | ✅ |
+| `go vet ./...` | ✅ |
+| `go test ./...` | ✅ **14 paket lulus** |
+| `pkg/marketfeed` | ❌ butuh jaringan Binance (gagal sejak awal, bukan regresi) |
+| Tes rute `TestRuteHanyaILA` | ✅ rute BBMA benar-benar 404, rute ILA hidup |
+| Mutasi: rute `analysis/mtf` dikembalikan → tes harus gagal | ✅ gagal seperti diharapkan |
+| `git diff --stat pkg/` | ✅ kosong |
+| `cli -symbol XAUUSD -htf H4 -ltf M15` (data pasar nyata) | ✅ sweep FVG, DOL, CISD keluar benar |
+| `cli -symbol XAUUSD` (4 pasangan) | ✅ keempat pasangan terbaca benar |
+
+Contoh keluaran nyata setelah penghapusan:
+
+```
+🔍 HTF SWEEP INSIDE FVG (H4):
+  └ Candle 06 Nov 19:00 masuk ke Bearish FVG Terakhir (4066.20 - 4081.51)
+    dan menyapu High wick candle sebelumnya (4078.62 > 4077.65). Target DOL: 4027.43 (SSL).
+⚡ LTF STATUS (M15):
+  └ Menunggu konfirmasi CISD (Body break Body).
+```
+
+---
+
+#### Catatan untuk Hermes
+
+- **Aturan trading tidak berubah sama sekali.** Logika FVG terakhir aktif, sweep,
+CISD, SL candle 5, dan DOL tetap milik `pkg/ila` dan `pkg/sequence`.
+- `mt_symbols.json` sudah masuk `.gitignore`: itu katalog simbol broker
+(data acuan), bukan kode. Runner mengambil spesifikasi simbol langsung dari API
+Match-Trader, jadi file ini tidak dibutuhkan di repo.
+- `cmd/cli` sekarang: `-execute` → eksekusi ILA, `-eval` → post-mortem,
+tanpa flag → analisis ILA (4 pasangan atau satu pasangan bila `-htf`/`-ltf` diisi).
+
+---
+
 ### [2026-11-09] PERBAIKAN — Banjir log saat simbol gagal dievaluasi
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN

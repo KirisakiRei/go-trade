@@ -28,3 +28,6 @@ plans/
 *.key
 *.pem
 certs/
+
+# Katalog simbol broker (data acuan lokal, bukan kode)
+mt_symbols.json

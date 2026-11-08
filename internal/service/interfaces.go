@@ -8,25 +8,11 @@ import (
 	"ila-engine/pkg/ila"
 )
 
-type BBMAService interface {
-	Analyze(ctx context.Context, req dto.AnalysisRequest) (*dto.AnalysisResponse, error)
-	AnalyzeMTF(ctx context.Context, req dto.MTFAnalysisRequest) (*dto.MTFAnalysisResponse, error)
-	ListActiveSetups(ctx context.Context, symbol string, p dto.PaginationQuery) ([]model.SetupRecord, dto.PaginationMeta, error)
-}
-
 type MarketService interface {
 	GetCandles(ctx context.Context, symbol, timeframe string, limit int) ([]model.MarketCandle, error)
 }
 
-type MonitorService interface {
-	StartMonitoring(ctx context.Context, symbol, contextTF, entryTF string) error
-	StopMonitoring()
-	GetStatus() dto.MonitorStatusResponse
-	SetAlertCallback(cb func(setup *dto.AnalysisResponse))
-}
-
 type ExecutionService interface {
-	EvaluateAndExecute(ctx context.Context, req dto.TradeExecutionRequest) (*dto.TradeExecutionResult, error)
 	EvaluateAndExecuteILA(ctx context.Context, req dto.ILA2ExecuteRequest) (*dto.TradeExecutionResult, error)
 	GetOpenPositions(ctx context.Context) ([]dto.PositionResponse, error)
 	ListPositions(ctx context.Context, symbol, status string, p dto.PaginationQuery) ([]dto.PositionResponse, dto.PaginationMeta, error)

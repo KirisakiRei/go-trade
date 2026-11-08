@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// Auto-migrate tables
-	if err := db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.MarketCandle{}, &model.Position{}); err != nil {
+	if err := db.AutoMigrate(&model.TradeJournal{}, &model.MarketCandle{}, &model.Position{}); err != nil {
 		slog.Error("Fatal database migration error", "error", err)
 		os.Exit(1)
 	}
@@ -46,9 +46,6 @@ func main() {
 
 	// 4. Setup Router & Wiring
 	app := router.SetupRouter(cfg, db)
-
-	// Note: BBMA Monitor & Auto-Execution disabled per user request (Focus exclusively on ILA)
-	// (SetAlertCallback and StartMonitoring commented out to prevent background BBMA alerts/orders)
 
 	// Background worker: Real-time position monitor (Passive Broker Reconciliation)
 	go func() {

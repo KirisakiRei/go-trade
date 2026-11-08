@@ -8,15 +8,6 @@ import (
 	"ila-engine/internal/model"
 )
 
-type SetupRepository interface {
-	Create(ctx context.Context, setup *model.SetupRecord) error
-	FindByID(ctx context.Context, id string) (*model.SetupRecord, error)
-	FindBySetupID(ctx context.Context, setupID string) (*model.SetupRecord, error)
-	FindLatestBySymbol(ctx context.Context, symbol, timeframe string) (*model.SetupRecord, error)
-	ListActive(ctx context.Context, symbol string, pagination dto.PaginationQuery) ([]model.SetupRecord, int64, error)
-	UpdateState(ctx context.Context, setupID, state string) error
-}
-
 type JournalRepository interface {
 	Create(ctx context.Context, journal *model.TradeJournal) error
 	List(ctx context.Context, symbol string, pagination dto.PaginationQuery) ([]model.TradeJournal, int64, error)

@@ -298,9 +298,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	_ = db.AutoMigrate(&model.SetupRecord{}, &model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
-	setupRepo := repository.NewSetupRepository(db)
-	_ = setupRepo
+	_ = db.AutoMigrate(&model.TradeJournal{}, &model.Position{}, &model.TradeEvaluation{})
 	positionRepo := repository.NewPositionRepository(db)
 	evalRepo := repository.NewEvaluationRepository(db)
 	feedProvider := marketfeed.NewMultiFeedProvider()

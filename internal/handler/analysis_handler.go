@@ -12,67 +12,11 @@ import (
 )
 
 type AnalysisHandler struct {
-	bbmaService service.BBMAService
-	ilaService  service.ILA2Service
+	ilaService service.ILA2Service
 }
 
-func NewAnalysisHandler(bbmaService service.BBMAService, ilaService service.ILA2Service) *AnalysisHandler {
-	return &AnalysisHandler{
-		bbmaService: bbmaService,
-		ilaService:  ilaService,
-	}
-}
-
-func (h *AnalysisHandler) Analyze(c *gin.Context) {
-	var req dto.AnalysisRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid analysis query parameters", err.Error())
-		return
-	}
-
-	res, err := h.bbmaService.Analyze(c.Request.Context(), req)
-	if err != nil {
-		status, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, status, code, err.Error(), nil)
-		return
-	}
-
-	httpx.OK(c, "Analysis completed successfully", res)
-}
-
-func (h *AnalysisHandler) ListSetups(c *gin.Context) {
-	var p dto.PaginationQuery
-	if err := c.ShouldBindQuery(&p); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid pagination parameters", err.Error())
-		return
-	}
-
-	symbol := c.Query("symbol")
-	setups, meta, err := h.bbmaService.ListActiveSetups(c.Request.Context(), symbol, p)
-	if err != nil {
-		status, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, status, code, err.Error(), nil)
-		return
-	}
-
-	httpx.OKWithMeta(c, "Active setups retrieved successfully", setups, meta)
-}
-
-func (h *AnalysisHandler) AnalyzeMTF(c *gin.Context) {
-	var req dto.MTFAnalysisRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid MTF analysis parameters", err.Error())
-		return
-	}
-
-	res, err := h.bbmaService.AnalyzeMTF(c.Request.Context(), req)
-	if err != nil {
-		status, code := apperror.MapHTTPStatus(err)
-		httpx.Error(c, status, code, err.Error(), nil)
-		return
-	}
-
-	httpx.OK(c, "Multi-timeframe analysis completed successfully", res)
+func NewAnalysisHandler(ilaService service.ILA2Service) *AnalysisHandler {
+	return &AnalysisHandler{ilaService: ilaService}
 }
 
 func (h *AnalysisHandler) AnalyzeILA2(c *gin.Context) {
