@@ -16,7 +16,7 @@ type ilaService struct {
 	evaluator *ila.Evaluator
 }
 
-func NewILAService(feed marketfeed.Provider) ILAService {
+func NewILA2Service(feed marketfeed.Provider) ILA2Service {
 	return &ilaService{
 		feed:      feed,
 		evaluator: ila.NewEvaluator(),
@@ -40,7 +40,7 @@ func (s *ilaService) MapDefaultLTF(htf string) string {
 	}
 }
 
-func (s *ilaService) AnalyzeILA(ctx context.Context, req dto.ILAAnalysisRequest) (*ila.ILASetup, error) {
+func (s *ilaService) AnalyzeILA2(ctx context.Context, req dto.ILA2AnalysisRequest) (*ila.ILASetup, error) {
 	if req.Symbol == "" {
 		req.Symbol = "XAUUSD"
 	}
@@ -101,7 +101,7 @@ func (s *ilaService) AnalyzeAllPairs(ctx context.Context, symbol string) (*ila.I
 
 	activeCount := 0
 	for i, p := range pairs {
-		setup, err := s.AnalyzeILA(ctx, dto.ILAAnalysisRequest{
+		setup, err := s.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 			Symbol: symbol,
 			HTF:    p.htf,
 			LTF:    p.ltf,

@@ -22,7 +22,7 @@ import (
 
 type executionService struct {
 	bbmaService    BBMAService
-	ilaService     ILAService
+	ilaService     ILA2Service
 	evalService    EvaluationService
 	positionRepo   repository.PositionRepository
 	journalRepo    repository.JournalRepository
@@ -34,7 +34,7 @@ type executionService struct {
 
 func NewExecutionService(
 	bbmaService BBMAService,
-	ilaService ILAService,
+	ilaService ILA2Service,
 	evalService EvaluationService,
 	positionRepo repository.PositionRepository,
 	journalRepo repository.JournalRepository,
@@ -617,7 +617,7 @@ func (s *executionService) ConfirmSignal(ctx context.Context, req dto.ConfirmSig
 	return s.positionRepo.Create(ctx, posRecord)
 }
 
-func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.ILAExecuteRequest) (*dto.TradeExecutionResult, error) {
+func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.ILA2ExecuteRequest) (*dto.TradeExecutionResult, error) {
 	if req.RiskRatio <= 0 {
 		req.RiskRatio = 0.5 // Default 0.5% (konservatif & aman prop firm)
 	}
@@ -662,7 +662,7 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 	}
 
 	// 3. Evaluate ILA Setup
-	setup, err := s.ilaService.AnalyzeILA(ctx, dto.ILAAnalysisRequest{
+	setup, err := s.ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 		Symbol: req.Symbol,
 		HTF:    req.HTF,
 		LTF:    req.LTF,

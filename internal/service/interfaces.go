@@ -27,7 +27,7 @@ type MonitorService interface {
 
 type ExecutionService interface {
 	EvaluateAndExecute(ctx context.Context, req dto.TradeExecutionRequest) (*dto.TradeExecutionResult, error)
-	EvaluateAndExecuteILA(ctx context.Context, req dto.ILAExecuteRequest) (*dto.TradeExecutionResult, error)
+	EvaluateAndExecuteILA(ctx context.Context, req dto.ILA2ExecuteRequest) (*dto.TradeExecutionResult, error)
 	GetOpenPositions(ctx context.Context) ([]dto.PositionResponse, error)
 	ListPositions(ctx context.Context, symbol, status string, p dto.PaginationQuery) ([]dto.PositionResponse, dto.PaginationMeta, error)
 	CheckAndManagePositions(ctx context.Context) error
@@ -46,7 +46,7 @@ type EvaluationService interface {
 	PreFlightCheck(ctx context.Context, symbol, direction, setupType string, slDist float64) (*dto.PreFlightCheckResult, error)
 }
 
-type ILAService interface {
-	AnalyzeILA(ctx context.Context, req dto.ILAAnalysisRequest) (*ila.ILASetup, error)
+type ILA2Service interface {
+	AnalyzeILA2(ctx context.Context, req dto.ILA2AnalysisRequest) (*ila.ILASetup, error)
 	AnalyzeAllPairs(ctx context.Context, symbol string) (*ila.ILAMultiResponse, error)
 }

@@ -13,10 +13,10 @@ import (
 
 type AnalysisHandler struct {
 	bbmaService service.BBMAService
-	ilaService  service.ILAService
+	ilaService  service.ILA2Service
 }
 
-func NewAnalysisHandler(bbmaService service.BBMAService, ilaService service.ILAService) *AnalysisHandler {
+func NewAnalysisHandler(bbmaService service.BBMAService, ilaService service.ILA2Service) *AnalysisHandler {
 	return &AnalysisHandler{
 		bbmaService: bbmaService,
 		ilaService:  ilaService,
@@ -75,8 +75,8 @@ func (h *AnalysisHandler) AnalyzeMTF(c *gin.Context) {
 	httpx.OK(c, "Multi-timeframe analysis completed successfully", res)
 }
 
-func (h *AnalysisHandler) AnalyzeILA(c *gin.Context) {
-	var req dto.ILAAnalysisRequest
+func (h *AnalysisHandler) AnalyzeILA2(c *gin.Context) {
+	var req dto.ILA2AnalysisRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid ILA analysis parameters", err.Error())
 		return
@@ -93,7 +93,7 @@ func (h *AnalysisHandler) AnalyzeILA(c *gin.Context) {
 		return
 	}
 
-	res, err := h.ilaService.AnalyzeILA(c.Request.Context(), req)
+	res, err := h.ilaService.AnalyzeILA2(c.Request.Context(), req)
 	if err != nil {
 		status, code := apperror.MapHTTPStatus(err)
 		httpx.Error(c, status, code, err.Error(), nil)

@@ -46,7 +46,7 @@ func (h *TradeHandler) Execute(c *gin.Context) {
 }
 
 func (h *TradeHandler) ExecuteILA(c *gin.Context) {
-	var req dto.ILAExecuteRequest
+	var req dto.ILA2ExecuteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httpx.Error(c, http.StatusBadRequest, "BAD_REQUEST", "Invalid ILA trade execution payload", err.Error())
 		return

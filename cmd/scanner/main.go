@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -26,14 +27,12 @@ import (
 )
 
 const (
-	DBPath              = "/opt/data/ila-engine/ila.db"
-	StateFilePath       = "/opt/data/ila-engine/monitor_state.json"
-	AccountSize         = 10000.0
-	DefaultRiskPercent  = 0.50
-	MinRR               = 2.0
-	MaxRR               = 2.3
-	EnableBBMAMonitor   = false // User instructed to disable BBMA monitoring
-	EnableBBMAExecution = false // User instructed to disable BBMA auto-execution
+	DBPath             = "/opt/data/ila-engine/ila.db"
+	StateFilePath      = "/opt/data/ila-engine/monitor_state.json"
+	AccountSize        = 10000.0
+	DefaultRiskPercent = 0.50
+	MinRR              = 2.0
+	MaxRR              = 2.3
 )
 
 var Pairs = []string{"XAUUSD", "EURUSD", "USTEC"}
@@ -147,23 +146,6 @@ func formatPrice(symbol string, val float64) string {
 	return fmt.Sprintf("%.5f", val)
 }
 
-func phaseLabel(phase string) string {
-	mapping := map[string]string{
-		"MOMENTUM_CONFIRMED": "Momentum (CSM)",
-		"EXTREME_CONFIRMED":  "Extreme",
-		"REENTRY_CONFIRMED":  "Re-entry",
-		"MHV_CONFIRMED":      "MHV (Market Hilang Volume)",
-		"CS_KUKUH":           "CSAK (Arah Kukuh)",
-		"CS_AWAL":            "CS Arah Awal",
-		"SIDEWAYS":           "Sideways",
-		"NEUTRAL":            "Netral",
-	}
-	if v, ok := mapping[phase]; ok {
-		return v
-	}
-	return strings.ReplaceAll(phase, "_", " ")
-}
-
 func statusLabel(st string) string {
 	mapping := map[string]string{
 		"SETUP_VALID": "Setup Terkonfirmasi",
@@ -189,26 +171,6 @@ func biasLabel(b string) string {
 		return v
 	}
 	return b
-}
-
-func gradeLabel(g string) string {
-	mapping := map[string]string{
-		"GRADE_A_PLUS":           "Grade A+ (Prime Setup)",
-		"GRADE_A":                "Grade A (Teknikal Valid)",
-		"GRADE_A_PENDING_RR":     "Grade A (Menunggu R:R >= 1:2)",
-		"GRADE_A_GOLDEN":         "Grade A (Golden Setup)",
-		"GRADE_B_STRONG":         "Grade B (Tren Kuat)",
-		"CONFLICT":               "Konflik Arah MTF",
-		"INVALID_CSM_AT_TF2":     "Re-entry Cacat (Ada CSM di TF2)",
-		"INVALID_CSM_AT_TRIGGER": "Trigger Batal (Ditembus CSM)",
-		"ROLLOVER_LOCK":          "Jeda Rollover Subuh",
-		"MARKET_CLOSED_WEEKEND":  "Pasar Libur Akhir Pekan",
-		"NEUTRAL":                "Netral",
-	}
-	if v, ok := mapping[g]; ok {
-		return v
-	}
-	return strings.ReplaceAll(g, "_", " ")
 }
 
 func patternLabel(p string) string {
@@ -271,104 +233,6 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(runes))
 }
 
-func makeBBMAStepTable(sym string, d *dto.MTFAnalysisResponse, changedTF string, rr float64) string {
-	mark := func(tf string) string {
-		if changedTF == tf {
-			return " ◀"
-		}
-		return "  "
-	}
-
-	h4Bias := "⚪ Netr"
-	if d.TF1Analysis.Bias == "BEARISH" {
-		h4Bias = "🔴 Sell"
-	} else if d.TF1Analysis.Bias == "BULLISH" {
-		h4Bias = "🟢 Buy "
-	}
-
-	h1Bias := "⚪ Netr"
-	if d.TF2Analysis.Bias == "BEARISH" {
-		h1Bias = "🔴 Sell"
-	} else if d.TF2Analysis.Bias == "BULLISH" {
-		h1Bias = "🟢 Buy "
-	}
-
-	m15Bias := "⚪ Netr"
-	if d.TF3Analysis.Bias == "BEARISH" {
-		m15Bias = "🔴 Sell"
-	} else if d.TF3Analysis.Bias == "BULLISH" {
-		m15Bias = "🟢 Buy "
-	}
-
-	h4Phase := padRight(phaseLabel(d.TF1Analysis.MarketPhase), 17)
-	h1Phase := padRight(phaseLabel(d.TF2Analysis.MarketPhase), 17)
-	m15Phase := padRight(phaseLabel(d.TF3Analysis.MarketPhase), 17)
-
-	gradeStr := padRight(gradeLabel(d.ConfluenceGrade), 32)
-	rrStr := "Menunggu Setup M15"
-	if rr >= 2.0 {
-		rrStr = fmt.Sprintf("1:%.2f (Lolos Quality Gate)", rr)
-	} else if rr > 0 {
-		rrStr = fmt.Sprintf("1:%.2f (< 1:2 Belum Valid)", rr)
-	}
-	rrPad := padRight(rrStr, 32)
-
-	return fmt.Sprintf("```text\n"+
-		"┌─────┬─────────┬───────────────────┬────────────┐\n"+
-		"│ TF  │  Arah   │    Fase Pasar     │   Status   │\n"+
-		"├─────┼─────────┼───────────────────┼────────────┤\n"+
-		"│ H4  │ %s │ %s │ Tren Utama%s│\n"+
-		"│ H1  │ %s │ %s │ Konfirmasi%s│\n"+
-		"│ M15 │ %s │ %s │ ⏳ Pantau %s│\n"+
-		"├─────┴─────────┴───────────────────┴────────────┤\n"+
-		"│ Kualifikasi : %s │\n"+
-		"│ R:R Est.    : %s │\n"+
-		"└────────────────────────────────────────────────┘\n```",
-		h4Bias, h4Phase, mark("H4"),
-		h1Bias, h1Phase, mark("H1"),
-		m15Bias, m15Phase, mark("M15"),
-		gradeStr, rrPad,
-	)
-}
-
-func makeBBMASessionTable(analyses map[string]*dto.MTFAnalysisResponse, state MonitorState) string {
-	rows := []string{}
-	for _, sym := range Pairs {
-		d, ok := analyses[sym]
-		if !ok {
-			continue
-		}
-		sName, _ := getSymbolDisplay(sym)
-		biasStr := "⚪ Netr"
-		if d.Bias == "BEARISH" {
-			biasStr = "🔴 Sell"
-		} else if d.Bias == "BULLISH" {
-			biasStr = "🟢 Buy "
-		}
-
-		stStr := padRight(fmt.Sprintf("M15 %s", phaseLabel(d.TF3Analysis.MarketPhase)), 16)
-		gStr := padRight(gradeLabel(d.ConfluenceGrade), 11)
-
-		mark := "  "
-		prev := state.Pairs[sym]
-		if prev.LastGrade != d.ConfluenceGrade && prev.LastGrade != "" {
-			mark = " ◀"
-		}
-
-		rows = append(rows, fmt.Sprintf("│ %s │ %s │ %s │ %s%s│",
-			padRight(sName, 7), biasStr, stStr, gStr, mark))
-	}
-
-	return fmt.Sprintf("```text\n"+
-		"┌─────────┬─────────┬──────────────────┬───────────┐\n"+
-		"│  Pair   │  Arah   │   Status Setup   │ Kualitas  │\n"+
-		"├─────────┼─────────┼──────────────────┼───────────┤\n"+
-		"%s\n"+
-		"└─────────┴─────────┴──────────────────┴───────────┘\n```",
-		strings.Join(rows, "\n"),
-	)
-}
-
 type ILARowDisplay struct {
 	PairName string
 	Bias     string
@@ -406,7 +270,22 @@ func makeILATable(pairs []ILARowDisplay) string {
 	)
 }
 
+// executeEnabled menandai apakah scanner boleh mengirim order ke broker.
+//
+// Default true: perilaku lama tidak berubah. Set -execute=false saat Runner
+// sudah mengambil alih eksekusi, agar tidak terjadi dua order untuk setup yang
+// sama (plans/04 §11). Pemantauan dan notifikasi tetap berjalan.
+var executeEnabled = true
+
 func main() {
+	flag.BoolVar(&executeEnabled, "execute", true,
+		"kirim order ke broker; false = hanya memantau dan memberi notifikasi")
+	flag.Parse()
+
+	if !executeEnabled {
+		fmt.Fprintln(os.Stderr, "EKSEKUSI DIMATIKAN: hanya memantau, tidak mengirim order")
+	}
+
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
 
@@ -610,11 +489,7 @@ func main() {
 	if inActiveSession && currentSession != lastSession {
 		state.LastSession = currentSession
 		sessTitle := cleanSessionName(currentSession)
-		if EnableBBMAMonitor {
-			// Will be populated if BBMA is enabled
-		} else {
-			messages = append(messages, fmt.Sprintf("🔔 **[%s] Sesi Pasar Aktif (Mode ILA)**\nRadar ILA aktif memantau setup di 4 pasangan timeframe (XAUUSD, EURUSD, USTEC).", strings.ToUpper(sessTitle)))
-		}
+		messages = append(messages, fmt.Sprintf("🔔 **[%s] Sesi Pasar Aktif (Mode ILA)**\nRadar ILA aktif memantau setup di 4 pasangan timeframe (XAUUSD, EURUSD, USTEC).", strings.ToUpper(sessTitle)))
 	} else if !inActiveSession {
 		state.LastSession = currentSession
 	}
@@ -626,7 +501,7 @@ func main() {
 		return
 	}
 
-	ilaService := service.NewILAService(feedProvider)
+	ilaService := service.NewILA2Service(feedProvider)
 	allILAPairs := []struct {
 		HTF      string
 		LTF      string
@@ -648,7 +523,7 @@ func main() {
 
 		for _, ep := range allILAPairs {
 			ilaKey := fmt.Sprintf("%s-%s-%s", sym, ep.HTF, ep.LTF)
-			setup, err := ilaService.AnalyzeILA(ctx, dto.ILAAnalysisRequest{
+			setup, err := ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 				Symbol: sym,
 				HTF:    ep.HTF,
 				LTF:    ep.LTF,
@@ -722,6 +597,19 @@ func main() {
 					lot := calcLot(sym, entryPrice, sl, riskDollars)
 
 					setupID := fmt.Sprintf("ILA-%s-%s-%s-%s", sym, ep.HTF, ep.LTF, time.Now().Format("200601021504"))
+
+					if !executeEnabled {
+						// Order tidak dikirim: setup tetap dilaporkan sebagai
+						// notifikasi manual agar tidak ada sinyal yang hilang.
+						if inActiveSession {
+							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi dimatikan (mode pantau).**",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp), setup.RiskReward))
+						}
+						prevILA.LastStatus = "READY_TO_ENTRY"
+						state.ILAPairs[ilaKey] = prevILA
+						continue
+					}
 
 					orderRes, err := tradeBroker.ExecuteOrder(ctx, broker.OrderRequest{
 						Symbol:     sym,

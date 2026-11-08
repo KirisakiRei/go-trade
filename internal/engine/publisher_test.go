@@ -235,3 +235,86 @@ func TestHargaTidakLengkapDilewati(t *testing.T) {
 }
 
 var errBoom = errors.New("data pasar gagal diambil")
+
+// Setup ready tanpa arah (bias netral) tidak boleh terbit: Runner akan
+// menolaknya dan menyisakan baris sinyal mati.
+func TestTanpaArahTidakTerbit(t *testing.T) {
+	r := readyResult()
+	r.Direction = ""
+	pub, _, got := setup(t, map[string]*Result{"H4|M15": r}, jamBuka)
+	pub.Scan(context.Background())
+
+	if len(*got) != 0 {
+		t.Fatalf("sinyal = %d, ingin 0 karena arah tidak jelas", len(*got))
+	}
+}
+
+// Status menunggu dikirim untuk dashboard, tanpa harga dan tanpa izin eksekusi.
+func TestStatusMenungguDikirimBilaDiminta(t *testing.T) {
+	reg := NewRegistry()
+	var diterima []Signal
+	reg.Add(Subscriber{
+		ID: "dash", Symbols: map[string]struct{}{"XAUUSD": {}}, WantStatus: true,
+		Send: func(s Signal) { diterima = append(diterima, s) },
+	})
+	eval := &fakeEvaluator{strategy: "ila-2.0", pairs: []Pair{{HTF: "H4", LTF: "M15"}},
+		results: map[string]*Result{"H4|M15": {Status: "WAIT_LTF_CISD"}}}
+	pub := NewPublisher(eval, reg, Version{}, discards()).
+		WithClock(func() time.Time { return jamBuka })
+	pub.Scan(context.Background())
+
+	if len(diterima) != 1 {
+		t.Fatalf("status = %d, ingin 1", len(diterima))
+	}
+	if diterima[0].Status != signal.WaitLTFCISD {
+		t.Fatalf("status = %q, ingin WAIT_LTF_CISD", diterima[0].Status)
+	}
+	if diterima[0].Entry != 0 || diterima[0].StopLoss != 0 {
+		t.Fatal("status menunggu tidak boleh membawa harga")
+	}
+}
+
+// Pelanggan yang tidak minta status tidak dibanjiri status menunggu.
+func TestStatusMenungguTidakDikirimBilaTidakDiminta(t *testing.T) {
+	reg := NewRegistry()
+	var diterima []Signal
+	reg.Add(Subscriber{
+		ID: "diam", Symbols: map[string]struct{}{"XAUUSD": {}}, WantStatus: false,
+		Send: func(s Signal) { diterima = append(diterima, s) },
+	})
+	eval := &fakeEvaluator{strategy: "ila-2.0", pairs: []Pair{{HTF: "H4", LTF: "M15"}},
+		results: map[string]*Result{"H4|M15": {Status: "WAIT_LTF_CISD"}}}
+	pub := NewPublisher(eval, reg, Version{}, discards()).
+		WithClock(func() time.Time { return jamBuka })
+	pub.Scan(context.Background())
+
+	if len(diterima) != 0 {
+		t.Fatalf("status = %d, ingin 0", len(diterima))
+	}
+}
+
+// ID status menunggu harus tetap sama antar scan agar Runner tidak menyimpan
+// baris baru setiap menit.
+func TestIDStatusStabil(t *testing.T) {
+	reg := NewRegistry()
+	var id []string
+	reg.Add(Subscriber{
+		ID: "dash", Symbols: map[string]struct{}{"XAUUSD": {}}, WantStatus: true,
+		Send: func(s Signal) { id = append(id, s.ID) },
+	})
+	eval := &fakeEvaluator{strategy: "ila-2.0", pairs: []Pair{{HTF: "H4", LTF: "M15"}},
+		results: map[string]*Result{"H4|M15": {Status: "WAIT_LTF_CISD"}}}
+	pub := NewPublisher(eval, reg, Version{}, discards()).
+		WithClock(func() time.Time { return jamBuka })
+
+	pub.Scan(context.Background())
+	pub.WithClock(func() time.Time { return jamBuka.Add(time.Minute) })
+	pub.Scan(context.Background())
+
+	if len(id) != 2 {
+		t.Fatalf("status diterima = %d, ingin 2", len(id))
+	}
+	if id[0] != id[1] {
+		t.Fatalf("ID status berubah antar scan: %q vs %q", id[0], id[1])
+	}
+}

@@ -64,7 +64,7 @@ type ConfirmSignalRequest struct {
 	ExecutedPrice float64 `json:"executed_price" binding:"required"`
 }
 
-type ILAExecuteRequest struct {
+type ILA2ExecuteRequest struct {
 	Symbol    string  `json:"symbol" binding:"required"`
 	HTF       string  `json:"htf,default=H4"`
 	LTF       string  `json:"ltf,default=M15"`

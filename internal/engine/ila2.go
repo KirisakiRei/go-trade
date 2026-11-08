@@ -23,12 +23,12 @@ var ILA2Pairs = []Pair{
 
 // ila2Evaluator membungkus service ILA 2.0.
 type ila2Evaluator struct {
-	svc   service.ILAService
+	svc   service.ILA2Service
 	pairs []Pair
 }
 
 // NewILA2Evaluator merangkai adapter ILA 2.0.
-func NewILA2Evaluator(svc service.ILAService) Evaluator {
+func NewILA2Evaluator(svc service.ILA2Service) Evaluator {
 	return &ila2Evaluator{svc: svc, pairs: ILA2Pairs}
 }
 
@@ -37,7 +37,7 @@ func (e *ila2Evaluator) StrategyVersion() string { return "ila-2.0" }
 func (e *ila2Evaluator) Pairs() []Pair { return e.pairs }
 
 func (e *ila2Evaluator) Evaluate(symbol, htf, ltf string) (*Result, error) {
-	setup, err := e.svc.AnalyzeILA(context.Background(), dto.ILAAnalysisRequest{
+	setup, err := e.svc.AnalyzeILA2(context.Background(), dto.ILA2AnalysisRequest{
 		Symbol: symbol,
 		HTF:    htf,
 		LTF:    ltf,

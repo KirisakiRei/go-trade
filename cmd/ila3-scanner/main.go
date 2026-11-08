@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -133,7 +134,21 @@ func calcLot(symbol string, entry, sl, riskDollars float64) float64 {
 	return lot
 }
 
+// executeEnabled menandai apakah scanner boleh mengirim order ke broker.
+//
+// Default true: perilaku lama tidak berubah. Set -execute=false saat Runner
+// sudah mengambil alih eksekusi (plans/04 §11).
+var executeEnabled = true
+
 func main() {
+	flag.BoolVar(&executeEnabled, "execute", true,
+		"kirim order ke broker; false = hanya memantau dan memberi notifikasi")
+	flag.Parse()
+
+	if !executeEnabled {
+		fmt.Fprintln(os.Stderr, "EKSEKUSI DIMATIKAN: hanya memantau, tidak mengirim order")
+	}
+
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
 
@@ -319,6 +334,17 @@ func main() {
 					if setup.Bias == "BEARISH" {
 						dir = "SELL"
 						dirEmoji = "🔴 SELL"
+					}
+
+					if !executeEnabled {
+						messages = append(messages, fmt.Sprintf(
+							"🎯 **[SETUP ILA 3.0 VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: %s (%s)\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi dimatikan (mode pantau).**",
+							sEmoji, sName, dirEmoji, setup.SetupType, ps.ModeName,
+							formatPrice(sym, setup.EntryPrice), formatPrice(sym, setup.StopLoss),
+							formatPrice(sym, setup.TakeProfit), setup.RiskReward))
+						prevState.LastState = "ENTRY"
+						state.Pairs[key] = prevState
+						continue
 					}
 
 					acc, accErr := cTraderBroker.GetAccountInfo(ctx)

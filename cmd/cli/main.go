@@ -38,7 +38,7 @@ func main() {
 	flag.Parse()
 
 	feed := marketfeed.NewMultiFeedProvider()
-	ilaService := service.NewILAService(feed)
+	ilaService := service.NewILA2Service(feed)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -72,7 +72,7 @@ func main() {
 			if targetLTF == "" {
 				targetLTF = "M15"
 			}
-			res, err = execService.EvaluateAndExecuteILA(ctx, dto.ILAExecuteRequest{
+			res, err = execService.EvaluateAndExecuteILA(ctx, dto.ILA2ExecuteRequest{
 				Symbol:    *symbol,
 				HTF:       targetHTF,
 				LTF:       targetLTF,
@@ -121,7 +121,7 @@ func main() {
 	}
 
 	if *ila {
-		ilaService := service.NewILAService(feed)
+		ilaService := service.NewILA2Service(feed)
 
 		if *htf == "" && *ltf == "" {
 			multi, err := ilaService.AnalyzeAllPairs(ctx, *symbol)
@@ -214,7 +214,7 @@ func main() {
 			return
 		}
 
-		setup, err := ilaService.AnalyzeILA(ctx, dto.ILAAnalysisRequest{
+		setup, err := ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 			Symbol: *symbol,
 			HTF:    *htf,
 			LTF:    *ltf,
@@ -444,7 +444,7 @@ func main() {
 		return
 	}
 
-	setup, err := ilaService.AnalyzeILA(ctx, dto.ILAAnalysisRequest{
+	setup, err := ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 		Symbol: *symbol,
 		HTF:    *htf,
 		LTF:    *ltf,

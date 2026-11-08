@@ -47,7 +47,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB) *AppComponents {
 	// Multi-Broker: Dual execution to both cTrader and Match-Trader simultaneously
 	var activeBroker broker.Broker = broker.NewMultiBrokerManager(mtrBroker, cTraderBroker)
 
-	ilaService := service.NewILAService(feedProvider)
+	ilaService := service.NewILA2Service(feedProvider)
 	evalService := service.NewEvaluationService(evalRepo, positionRepo, feedProvider)
 	executionService := service.NewExecutionService(nil, ilaService, evalService, positionRepo, journalRepo, activeBroker, feedProvider)
 
@@ -64,7 +64,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB) *AppComponents {
 	// API Routes (Murni ILA)
 	api := r.Group("/api/v1")
 	{
-		api.GET("/analysis/ila", analysisHandler.AnalyzeILA)
+		api.GET("/analysis/ila", analysisHandler.AnalyzeILA2)
 
 		trade := api.Group("/trade")
 		{

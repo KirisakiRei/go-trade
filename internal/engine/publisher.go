@@ -127,8 +127,24 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 		return
 	}
 
-	// Status menunggu hanya untuk tampilan; tidak diterbitkan sebagai sinyal.
+	// Status menunggu hanya untuk tampilan: dikirim sebagai status agar
+	// dashboard bisa menunjukkan kemajuan, tetap tanpa harga dan tanpa izin
+	// eksekusi (plans/04 §5).
 	if status != signal.Ready {
+		if !p.reg.WantsStatus(symbol) {
+			p.mu.Unlock()
+			return
+		}
+		p.mu.Unlock()
+		p.broadcastStatus(symbol, pair, status, now)
+		return
+	}
+
+	// Arah wajib jelas: tanpa BUY/SELL, Runner menolak sinyal dan menyisakan
+	// baris mati di database.
+	if res.Direction != "BUY" && res.Direction != "SELL" {
+		p.log.Warn("setup siap tanpa arah jelas, dilewati",
+			"symbol", symbol, "ltf", pair.LTF, "bias", res.Direction)
 		p.mu.Unlock()
 		return
 	}
@@ -228,6 +244,29 @@ func (p *Publisher) ActiveCount() int {
 		}
 	}
 	return n
+}
+
+// broadcastStatus mengirim status menunggu. Tidak pernah membawa harga dan
+// tidak boleh dieksekusi Runner.
+//
+// ID status sengaja stabil per slot, bukan unik tiap scan: Runner menyimpan
+// setiap sinyal yang diterimanya, jadi ID baru tiap menit akan membuat tabel
+// sinyal membengkak tanpa batas.
+func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time) {
+	p.reg.Broadcast(Signal{
+		ID:          statusID(symbol, pair),
+		Symbol:      symbol,
+		HTF:         pair.HTF,
+		LTF:         pair.LTF,
+		Status:      status,
+		Action:      signal.ActionPublish,
+		PublishedAt: now,
+	})
+}
+
+// statusID membentuk identitas tetap untuk status menunggu satu slot.
+func statusID(symbol string, pair Pair) string {
+	return "status-" + symbol + "-" + pair.HTF + "-" + pair.LTF
 }
 
 func (p *Publisher) broadcast(sig Signal) {

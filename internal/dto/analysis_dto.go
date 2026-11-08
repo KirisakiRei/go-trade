@@ -97,7 +97,7 @@ type MTFAnalysisResponse struct {
 	EntryPlan            *EntryPlan        `json:"entry_plan,omitempty"`
 }
 
-type ILAAnalysisRequest struct {
+type ILA2AnalysisRequest struct {
 	Symbol string `form:"symbol" json:"symbol" binding:"required"`
 	HTF    string `form:"htf,default=H4" json:"htf"`
 	LTF    string `form:"ltf,default=M15" json:"ltf"`

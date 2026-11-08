@@ -133,6 +133,23 @@ func (r *Registry) Broadcast(sig Signal) int {
 	return len(targets)
 }
 
+// WantsStatus menyatakan apakah ada pelanggan yang ingin menerima status
+// menunggu untuk simbol ini. Bila tidak ada, engine tidak mengirim status
+// agar tidak membanjiri jaringan dengan data yang tidak dipakai.
+func (r *Registry) WantsStatus(symbol string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, s := range r.subs {
+		if !s.WantStatus {
+			continue
+		}
+		if _, ok := s.Symbols[symbol]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Count mengembalikan jumlah pelanggan terhubung.
 func (r *Registry) Count() int {
 	r.mu.RLock()

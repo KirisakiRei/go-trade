@@ -242,6 +242,144 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-08] SELESAI — S7 flag eksekusi, S8 langganan dinamis, S9 hapus BBMA, penamaan ILA 2.0
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN + FITUR
+- **Status:** 🟢 SELESAI
+
+---
+
+#### Latar
+
+Lanjutan dari entri sebelumnya (engine gRPC). Entri ini menutup sisa pekerjaan
+yang tercatat di `plans/ENGINE_GRPC_MIGRATION.md` sebagai S7, S8, S9, dan
+merapikan penamaan yang masih membingungkan antara ILA 2.0 dan ILA 3.0.
+
+**Batas yang dipatuhi:** `pkg/ila`, `pkg/sequence`, `pkg/keylevels`,
+`pkg/quarterly`, `pkg/ssmt`, `pkg/stdev`, `pkg/risk`, `pkg/indicators`
+**nol perubahan**. Diverifikasi dengan `git diff --stat pkg/` (kosong).
+
+---
+
+#### S7 — Flag `-execute` pada kedua scanner
+
+**Masalah.** Setelah Runner mengambil alih eksekusi, scanner lama tetap
+mengirim order. Akibatnya satu setup bisa dieksekusi dua kali: sekali oleh
+scanner, sekali oleh Runner.
+
+**Perbaikan.** Setiap scanner punya flag `-execute` dengan **default `true`**.
+Perilaku lama tidak berubah sampai owner memutuskan mematikannya.
+
+| Perintah | Arti |
+|---|---|
+| `ila-scanner` | tetap mengeksekusi seperti dulu |
+| `ila-scanner -execute=false` | hanya memantau + notifikasi manual |
+| `ila3-scanner -execute=false` | idem untuk ILA 3.0 |
+
+Saat dimatikan, setup valid **tetap dilaporkan** sebagai
+`🎯 [SETUP ... - ENTRY MANUAL]` agar tidak ada sinyal yang hilang.
+
+**File:** `cmd/scanner/main.go`, `cmd/ila3-scanner/main.go`
+
+---
+
+#### S8 — Langganan simbol dinamis (BUG di Runner, sudah diperbaiki)
+
+**Masalah.** Runner menghitung simbol **sekali** saat koneksi dibuka.
+`Subscribe`/`Unsubscribe` tidak pernah dipanggil sama sekali. Akibatnya:
+
+> Pengguna yang baru berlangganan GBPUSD tidak akan dipantau sampai Runner
+> dijalankan ulang. Untuk SaaS ini tidak bisa diterima.
+
+**Perbaikan (di repo `go-ila-platform`, bukan di sini).**
+- `runner.Service.SyncSubscriptions` menghitung selisih antara simbol yang
+  sudah dikirim dan kebutuhan saat ini, lalu hanya mengirim selisihnya.
+- `cmd/runner` menyelaraskan setiap **2 menit** selama stream hidup, dan
+  sekali lagi segera setelah reconnect (engine bisa sudah lupa).
+- Kegagalan tidak menandai "sudah terkirim", jadi percobaan berikutnya
+  mengulang daftar yang benar.
+
+**Bukti uji end-to-end** (engine hidup + Runner hidup + PostgreSQL):
+```
+17:01:40  engine menerima  symbols=["XAUUSD"]
+          (EURUSD ditambahkan ke database, Runner TIDAK di-restart)
+17:03:40  engine menerima  symbols=["EURUSD"]     ← berhasil
+          (EURUSD dicabut)
+17:06:09  engine mencabut  symbols=["EURUSD"]     ← berhasil
+```
+
+---
+
+#### S9 — BBMA dihapus dari jalur engine
+
+**Yang dihapus dari `cmd/scanner/main.go`:**
+- `EnableBBMAMonitor`, `EnableBBMAExecution` (sudah `false`, tidak dipakai)
+- `makeBBMAStepTable`, `makeBBMASessionTable`
+- `phaseLabel`, `gradeLabel` (hanya dipakai dua fungsi di atas)
+- Cabang `if EnableBBMAMonitor` pada briefing sesi
+
+Hasil: `cmd/scanner/main.go` turun dari **891 → 738 baris**, nol kata "BBMA".
+
+**Yang SENGAJA belum dihapus.** Sisa BBMA masih ada di `internal/service/`
+(`bbma_service.go`), `internal/handler/analysis_handler.go`,
+`internal/model/setup.go`. Itu milik **server HTTP**, bukan jalur engine.
+Menghapusnya berarti memutus endpoint `/api/v1/analysis/mtf` dan monitor.
+Kalau owner ingin itu juga dihapus, pekerjaannya terpisah dan perlu keputusan
+soal endpoint pengganti.
+
+---
+
+#### Penamaan: ILA → ILA 2.0
+
+Nama lama tidak membedakan strategi. Yang diubah (lapisan service/dto/cmd,
+**bukan** `pkg/`):
+
+| Lama | Baru |
+|---|---|
+| `service.ILAService` | `service.ILA2Service` |
+| `service.NewILAService` | `service.NewILA2Service` |
+| `dto.ILAAnalysisRequest` | `dto.ILA2AnalysisRequest` |
+| `dto.ILAExecuteRequest` | `dto.ILA2ExecuteRequest` |
+
+Catatan: referensi ke paket rules (`ila.ILAMultiResponse`, `ila.ILAPairResult`)
+**dikembalikan apa adanya** — itu milik `pkg/ila` dan tidak boleh di-rename.
+
+---
+
+#### Dua bug yang ditemukan saat audit pekerjaan ini sendiri
+
+| # | Bug | Dampak | Perbaikan |
+|---|---|---|---|
+| 1 | Setup `READY_TO_ENTRY` bisa terbit dengan `Direction` kosong (bias netral) | Runner menolak, menyisakan baris sinyal mati di database | arah wajib BUY/SELL, jika tidak → dilewati + log |
+| 2 | Status menunggu (`WAIT_*`) memakai ID unik tiap scan | Runner menyimpan tiap kiriman, tabel `signal` membengkak **tanpa batas** (satu baris per menit per slot) | ID status dibuat **stabil** per slot (`status-SYMBOL-HTF-LTF`) |
+
+Selain itu, status menunggu kini hanya dikirim ke pelanggan yang meminta
+(`want_status_updates`), supaya jaringan tidak dipenuhi data yang tidak dipakai.
+
+---
+
+#### Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `go build ./...` | BERSIH |
+| `go vet ./...` | BERSIH |
+| `gofmt` berkas baru | BERSIH |
+| Paket tes lulus | **13** |
+| `pkg/marketfeed` | gagal: butuh jaringan Binance (sudah begitu sebelumnya) |
+| `git diff --stat pkg/` | kosong (**rules tidak tersentuh**) |
+| Uji end-to-end Engine ⇄ Runner | sinyal mengalir, langganan tambah/cabut berjalan |
+| Uji flag `-execute=false` | scanner menolak mengirim order, notifikasi tetap terbit |
+
+---
+
+#### Yang masih tersisa (belum, bukan terlupa)
+
+1. **ILA 3.0 belum diuji dengan data pasar nyata.** Adapter sudah ada dan
+   memetakan 11 state ke kontrak, tapi baru diuji dengan evaluator tiruan.
+2. **BBMA di server HTTP** belum dihapus (lihat S9).
+3. **`mt_symbols.json`** (121 KB) masih untracked di repo, bukan buatan Claude.
+
 ### [2026-11-08] FITUR — Engine menjadi produsen sinyal gRPC (rules trading tidak disentuh)
 - **Pelaku:** Claude
 - **Tipe:** FITUR

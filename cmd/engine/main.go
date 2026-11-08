@@ -77,7 +77,7 @@ func main() {
 			logger.Warn("strategi tidak dikenal, memakai ila-2.0", "diminta", *strategy)
 		}
 		feed := marketfeed.NewMultiFeedProvider()
-		evaluator = engine.NewILA2Evaluator(service.NewILAService(feed))
+		evaluator = engine.NewILA2Evaluator(service.NewILA2Service(feed))
 	}
 
 	ver := engine.Version{Engine: *version, Strategy: evaluator.StrategyVersion()}
