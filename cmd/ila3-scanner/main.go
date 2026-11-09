@@ -178,15 +178,16 @@ func main() {
 	db.Where("status = ?", "OPEN").Find(&openPositions)
 
 	if len(openPositions) > 0 && cTraderBroker != nil {
-		activePositions, _ := cTraderBroker.GetOpenPositions(ctx)
-		activeMap := make(map[string]bool)
-		for _, ap := range activePositions {
-			activeMap[ap.TicketNumber] = true
-		}
+		activePositions, err := cTraderBroker.GetOpenPositions(ctx)
+		if err == nil {
+			activeMap := make(map[string]bool)
+			for _, ap := range activePositions {
+				activeMap[ap.TicketNumber] = true
+			}
 
-		for _, pos := range openPositions {
-			if !activeMap[pos.TicketNumber] {
-				// Posisi sudah closed di cTrader!
+			for _, pos := range openPositions {
+				if !activeMap[pos.TicketNumber] {
+					// Posisi sudah closed di cTrader!
 				cPosID, _ := strconv.ParseInt(pos.TicketNumber, 10, 64)
 				exitPrice := pos.OpenPrice
 				actualPnL := 0.0
@@ -262,6 +263,7 @@ func main() {
 			}
 		}
 	}
+}
 
 	// 4. Market hours gate (skip weekend and rollover)
 	nowUtc := time.Now().UTC()

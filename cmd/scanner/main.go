@@ -317,46 +317,53 @@ func main() {
 	db.Where("status = ?", "OPEN").Find(&openPositions)
 
 	if len(openPositions) > 0 {
-		activePositions, _ := tradeBroker.GetOpenPositions(ctx)
-		activeMap := make(map[string]bool)
-		for _, ap := range activePositions {
-			activeMap[ap.TicketNumber] = true
-		}
-
-		for _, pos := range openPositions {
-			cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
-			cPosIDStr := strconv.FormatInt(cPosID, 10)
-
-			// Cek apakah posisi masih aktif di salah satu broker
-			isOpen := false
-			if activeMap[pos.TicketNumber] {
-				isOpen = true
-			}
-			if cPosID > 0 && activeMap[cPosIDStr] {
-				isOpen = true
-			}
-			if mtrID != "" && activeMap[mtrID] {
-				isOpen = true
-			}
-			if isOpen {
-				continue
+		activePositions, err := tradeBroker.GetOpenPositions(ctx)
+		if err == nil {
+			activeMap := make(map[string]bool)
+			for _, ap := range activePositions {
+				activeMap[ap.TicketNumber] = true
 			}
 
-			// Posisi sudah resmi tertutup di server broker! Tarik deal detailnya
-			exitPrice := pos.OpenPrice
-			actualPnL := 0.0
+			for _, pos := range openPositions {
+				cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
+				cPosIDStr := strconv.FormatInt(cPosID, 10)
 
-			// Tarik closed position dari Match-Trader
-			if mtrBroker != nil && mtrID != "" {
-				closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-24*time.Hour), time.Now())
-				for _, cp := range closedMtr {
-					if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
-						exitPrice = cp.ClosePrice
-						actualPnL = cp.Profit
-						break
+				// Cek apakah posisi masih aktif di broker
+				isOpen := false
+				if activeMap[pos.TicketNumber] {
+					isOpen = true
+				}
+				if cPosID > 0 && activeMap[cPosIDStr] {
+					isOpen = true
+				}
+				if mtrID != "" && activeMap[mtrID] {
+					isOpen = true
+				}
+				if isOpen {
+					continue
+				}
+
+				// Posisi tidak ada di daftar open. Cek konfirmasi closed position dari Match-Trader
+				exitPrice := pos.OpenPrice
+				actualPnL := 0.0
+				isDealFound := false
+
+				if mtrBroker != nil && mtrID != "" {
+					closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-48*time.Hour), time.Now())
+					for _, cp := range closedMtr {
+						if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
+							exitPrice = cp.ClosePrice
+							actualPnL = cp.Profit
+							isDealFound = true
+							break
+						}
 					}
 				}
-			}
+
+				// Jika deal penutup belum ditemukan dari broker, jangan tutup prematur di database!
+				if !isDealFound {
+					continue
+				}
 
 			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
 			tol := 0.50
@@ -415,6 +422,7 @@ func main() {
 			_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 		}
 	}
+}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)

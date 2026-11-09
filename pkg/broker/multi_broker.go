@@ -188,6 +188,10 @@ func ExtractTicketIDs(ticket string) (int64, string) {
 		}
 	}
 
+	if mtrID == "" && (strings.HasPrefix(ticket, "W") || strings.HasPrefix(ticket, "w")) {
+		mtrID = ticket
+	}
+
 	if cPosID == 0 {
 		cPosID, _ = strconv.ParseInt(ticket, 10, 64)
 	}
