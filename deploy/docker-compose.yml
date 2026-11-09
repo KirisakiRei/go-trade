@@ -1,0 +1,67 @@
+# Engine ILA 2.0 — daemon gRPC di VPS 1.
+#
+# Arah koneksi: Runner di VPS 2 yang menyambung ke sini. Engine hanya punya satu
+# koneksi keluar, yaitu pengiriman log ke VPS 2 lewat IP lokal AWS.
+#
+# Engine tidak menyimpan akun, kredensial broker, lot, atau posisi. Jangan
+# menambahkan variabel MATCHTRADER_*/CTRADER_* di sini: cmd/engine tidak
+# membacanya, dan menaruhnya di VPS 1 hanya memperluas rahasia yang bisa bocor.
+
+name: ila-engine
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "2"
+
+services:
+  engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      ENGINE_STRATEGY: ila-2.0
+      ENGINE_VERSION: "2.0.0"
+
+      # Port sengaja 9443, bukan default 9090. Penerima log platform memakai
+      # 9090; dua hal berbeda dengan nomor sama mudah tertukar saat menelusuri
+      # masalah koneksi.
+      ENGINE_GRPC_ADDR: ":9443"
+
+      # mTLS wajib: tanpa ini siapa pun yang bisa menjangkau port ini bisa
+      # menyamar sebagai Runner dan menyedot sinyal.
+      ENGINE_MTLS_CERT: /certs/engine-server.crt
+      ENGINE_MTLS_KEY: /certs/engine-server.key
+      ENGINE_MTLS_CA: /certs/ca.crt
+
+      ENGINE_LOG_DIR: /var/log/ila
+      ENGINE_LOG_HARI: "14"
+      ENGINE_LOG_BATAS_MB: "256"
+
+      # Log dikirim ke penerima log VPS 2 lewat IP lokal AWS, sehingga tidak
+      # perlu keluar ke internet publik.
+      ENGINE_LOG_GRPC_ADDR: ${LOG_SERVER_ADDR:-172.26.12.195:9090}
+      ENGINE_LOG_MTLS_CERT: /certs/engine-client.crt
+      ENGINE_LOG_MTLS_KEY: /certs/engine-client.key
+      ENGINE_LOG_MTLS_CA: /certs/ca.crt
+    ports:
+      # Dibatasi ke IP lokal: gRPC tidak pernah perlu dijangkau dari internet.
+      - "${LOCAL_IP:-172.26.1.188}:9443:9443"
+    volumes:
+      - ./certs:/certs:ro
+      - ${LOG_DIR_HOST:-/var/log/ila-engine}:/var/log/ila
+    mem_limit: 200m
+    cpus: "0.8"
+    pids_limit: 200
+    logging: *default-logging
+    healthcheck:
+      # Engine tidak punya endpoint HTTP. Pemeriksaan dilakukan dengan
+      # memastikan port gRPC sudah mendengar.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9443' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

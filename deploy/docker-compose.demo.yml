@@ -1,0 +1,13 @@
+# Override khusus UJI: menjalankan engine dalam mode evaluator tiruan.
+#
+# Dipakai sekali untuk membuktikan pipa gRPC + mTLS + pengiriman log berjalan
+# tanpa bergantung pada data pasar TradingView. Sinyal yang keluar pasti
+# READY_TO_ENTRY pada H4-M15, sehingga bila Runner tidak menerima apa pun,
+# masalahnya pasti di koneksi — bukan di strategi.
+#
+# Jalankan:  sudo docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.demo.yml up -d
+# Hentikan:  sudo docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.demo.yml down
+
+services:
+  engine:
+    command: ["--demo", "--interval", "30s"]

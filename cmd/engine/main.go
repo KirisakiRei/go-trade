@@ -159,6 +159,15 @@ func main() {
 			Time:              2 * time.Minute,
 			Timeout:           20 * time.Second,
 		}),
+		// Runner mengirim ping tiap 30 detik agar tahu secepat mungkin bila
+		// engine mati. Kebijakan bawaan gRPC hanya mengizinkan satu ping per
+		// 5 menit dan membalas ENHANCE_YOUR_CALM "too_many_pings", sehingga
+		// stream terputus lalu tersambung berulang tanpa alasan yang jelas.
+		// Batas di sini diterima sedikit lebih longgar daripada ping Runner.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	}
 	if *certFile != "" && *keyFile != "" {
 		creds, err := serverCreds(*certFile, *keyFile, *caFile)

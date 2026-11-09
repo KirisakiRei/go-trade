@@ -1,0 +1,22 @@
+# Konteks build sengaja dipersempit. VPS engine hanya 909 MB RAM: setiap
+# megabyte konteks yang terkirim ke daemon ikut menggerus ruang yang dibutuhkan
+# kompilasi Go.
+
+.git
+.gitignore
+.env
+*.env
+*.db
+*.db-wal
+*.db-shm
+*.log
+bin/
+plans/
+certs/
+*.crt
+*.key
+*.pem
+
+# Data acuan lokal yang tidak dipakai cmd/engine.
+mt_symbols.json
+*.json.tmp
