@@ -345,3 +345,44 @@ func TestIDStatusStabil(t *testing.T) {
 		t.Fatalf("ID status berubah antar scan: %q vs %q", id[0], id[1])
 	}
 }
+
+func TestJadwalLilinCloseDriven(t *testing.T) {
+	reg := NewRegistry()
+	var count int
+	reg.Add(Subscriber{
+		ID: "test", Symbols: map[string]struct{}{"XAUUSD": {}}, WantStatus: true,
+		Send: func(s Signal) { count++ },
+	})
+	eval := &fakeEvaluator{
+		strategy: "ila-2.0",
+		pairs:    []Pair{{HTF: "H4", LTF: "M15"}},
+		results:  map[string]*Result{"H4|M15": {Status: "WAIT_HTF_SWEEP"}},
+	}
+
+	// Mulai pada jam 10:05 UTC (di tengah candle H4)
+	jamAwal := time.Date(2026, 11, 2, 10, 5, 0, 0, time.UTC)
+	pub := NewPublisher(eval, reg, Version{}, discards()).
+		DenganJadwalLilin(3 * time.Second).
+		WithClock(func() time.Time { return jamAwal })
+
+	// Scan 1: Evaluasi awal wajib jalan
+	pub.Scan(context.Background())
+	if count != 1 {
+		t.Fatalf("evaluasi awal harus jalan, got count=%d", count)
+	}
+
+	// Scan 2: 1 menit kemudian (10:06 UTC), candle H4 belum tutup -> lewati
+	pub.WithClock(func() time.Time { return jamAwal.Add(time.Minute) })
+	pub.Scan(context.Background())
+	if count != 1 {
+		t.Fatalf("sebelum candle H4 tutup evaluasi harus dilewati, got count=%d", count)
+	}
+
+	// Scan 3: Saat candle H4 tutup (12:00:04 UTC) -> evaluasi jalan
+	jamH4Tutup := time.Date(2026, 11, 2, 12, 0, 4, 0, time.UTC)
+	pub.WithClock(func() time.Time { return jamH4Tutup })
+	pub.Scan(context.Background())
+	if count != 2 {
+		t.Fatalf("saat candle H4 tutup evaluasi harus jalan, got count=%d", count)
+	}
+}

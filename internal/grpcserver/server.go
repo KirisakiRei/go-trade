@@ -150,10 +150,27 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 		}
 	}
 
+	hbTicker := time.NewTicker(30 * time.Second)
+	defer hbTicker.Stop()
+
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
+		case <-hbTicker.C:
+			now := time.Now().UTC()
+			hb := &enginev1.EngineEvent{
+				Payload: &enginev1.EngineEvent_Heartbeat{
+					Heartbeat: &enginev1.Heartbeat{
+						EngineVersion: s.version.Engine,
+						At:            timestamppb.New(now),
+						ActiveSignals: int32(s.pub.ActiveCount()),
+					},
+				},
+			}
+			if err := stream.Send(hb); err != nil {
+				return err
+			}
 		case ev, ok := <-ch:
 			if !ok {
 				return nil

@@ -39,7 +39,7 @@ func main() {
 		addr     = flag.String("addr", env("ENGINE_GRPC_ADDR", ":9090"), "alamat dengar gRPC")
 		strategy = flag.String("strategy", env("ENGINE_STRATEGY", "ila-2.0"), "strategi: ila-2.0 | ila-3.0")
 		symbols  = flag.String("symbols", env("ENGINE_SYMBOLS", ""), "simbol awal, pisahkan koma; kosong berarti menunggu langganan Runner")
-		interval = flag.Duration("interval", envDuration("ENGINE_EVAL_INTERVAL", time.Minute), "jeda antar evaluasi")
+		interval = flag.Duration("interval", envDuration("ENGINE_EVAL_INTERVAL", 5*time.Second), "jeda antar evaluasi")
 		certFile = flag.String("tls-cert", env("ENGINE_MTLS_CERT", ""), "sertifikat server (kosong = tanpa TLS)")
 		keyFile  = flag.String("tls-key", env("ENGINE_MTLS_KEY", ""), "kunci server")
 		caFile   = flag.String("tls-ca", env("ENGINE_MTLS_CA", ""), "CA klien untuk mTLS")
@@ -117,6 +117,8 @@ func main() {
 	if *demo {
 		// Mode demo sengaja melewati jam pasar agar alur bisa diuji kapan saja.
 		pub = pub.AbaikanJamPasar()
+	} else {
+		pub = pub.DenganJadwalLilin(3 * time.Second)
 	}
 
 	// Simbol dari konfigurasi dijadikan pelanggan tetap agar engine bisa

@@ -9,6 +9,7 @@ import (
 
 	"ila-engine/internal/market"
 	"ila-engine/internal/signal"
+	"ila-engine/pkg/ila"
 )
 
 // Publisher menerbitkan sinyal untuk satu strategi.
@@ -31,16 +32,20 @@ type Publisher struct {
 
 	// abaikanJamPasar hanya untuk pengujian: memaksa engine mengevaluasi
 	// walau pasar tutup. Tidak pernah aktif di produksi.
-	abaikanJamPasar bool
+	abaikanJamPasar  bool
+	pakaiJadwalLilin bool
+	bufferLilin      time.Duration
 }
 
 // slotState mencatat slot sinyal beserta identitas simbolnya, supaya sinyal
 // kedaluwarsa bisa dikirim lengkap ke Runner.
 type slotState struct {
-	slot signal.Slot
-	sym  string
-	htf  string
-	ltf  string
+	slot            signal.Slot
+	sym             string
+	htf             string
+	ltf             string
+	lastStatus      signal.Status
+	lastEvaluatedAt time.Time
 }
 
 // NewPublisher merangkai evaluator dengan registry pelanggan.
@@ -60,6 +65,13 @@ func NewPublisher(eval Evaluator, reg *Registry, version Version, log *slog.Logg
 // alur sinyal di luar jam pasar; tidak boleh dipakai di produksi.
 func (p *Publisher) AbaikanJamPasar() *Publisher {
 	p.abaikanJamPasar = true
+	return p
+}
+
+// DenganJadwalLilin menyalakan evaluasi berbasis penutupan lilin.
+func (p *Publisher) DenganJadwalLilin(buffer time.Duration) *Publisher {
+	p.pakaiJadwalLilin = true
+	p.bufferLilin = buffer
 	return p
 }
 
@@ -89,7 +101,15 @@ func (p *Publisher) Scan(ctx context.Context) {
 
 	for _, symbol := range symbols {
 		for _, pair := range p.pairsFor(symbol) {
-			p.evaluateSlot(ctx, symbol, pair, now)
+			key := signal.Key(symbol, pair.HTF, pair.LTF)
+			p.mu.Lock()
+			st := p.slots[key]
+			due := p.slotDue(st, pair, now)
+			p.mu.Unlock()
+
+			if due {
+				p.evaluateSlot(ctx, symbol, pair, now)
+			}
 		}
 	}
 
@@ -152,6 +172,8 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 		st = &slotState{sym: symbol, htf: pair.HTF, ltf: pair.LTF}
 		p.slots[key] = st
 	}
+	st.lastEvaluatedAt = now
+	st.lastStatus = status
 
 	// Struktur batal: tarik sinyal yang sudah terbit.
 	if status == signal.Invalidated {
@@ -173,7 +195,7 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 			return
 		}
 		p.mu.Unlock()
-		p.broadcastStatus(symbol, pair, status, now)
+		p.broadcastStatus(symbol, pair, status, now, res)
 		return
 	}
 
@@ -301,13 +323,23 @@ func (p *Publisher) logGagal(symbol string, pair Pair, err error) {
 		"symbol", symbol, "htf", pair.HTF, "ltf", pair.LTF, "error", err.Error())
 }
 
-// broadcastStatus mengirim status menunggu. Tidak pernah membawa harga dan
-// tidak boleh dieksekusi Runner.
-//
-// ID status sengaja stabil per slot, bukan unik tiap scan: Runner menyimpan
-// setiap sinyal yang diterimanya, jadi ID baru tiap menit akan membuat tabel
-// sinyal membengkak tanpa batas.
-func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time) {
+// broadcastStatus mengirim status menunggu dengan data struktur pendukung.
+func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time, res *Result) {
+	dir := "NEUTRAL"
+	var summary, nextAction string
+	var htfSweep *ila.HTFSweep
+	var cisd *ila.CISD
+
+	if res != nil {
+		if res.Direction != "" {
+			dir = res.Direction
+		}
+		summary = res.Summary
+		nextAction = res.NextAction
+		htfSweep = res.HTFSweep
+		cisd = res.CISD
+	}
+
 	p.reg.Broadcast(Signal{
 		ID:          statusID(symbol, pair),
 		Symbol:      symbol,
@@ -315,8 +347,63 @@ func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Stat
 		LTF:         pair.LTF,
 		Status:      status,
 		Action:      signal.ActionPublish,
+		Direction:   dir,
+		Summary:     summary,
+		NextAction:  nextAction,
+		HTFSweep:    htfSweep,
+		CISD:        cisd,
 		PublishedAt: now,
+		ExpiresAt:   now.Add(signal.TTLUntuk(pair.LTF)),
 	})
+}
+
+func (p *Publisher) slotDue(st *slotState, pair Pair, now time.Time) bool {
+	if !p.pakaiJadwalLilin {
+		return true
+	}
+	if st == nil || st.lastEvaluatedAt.IsZero() {
+		return true
+	}
+
+	tf := pair.HTF
+	if st.lastStatus == signal.WaitLTFCISD {
+		tf = pair.LTF
+	}
+
+	return isCandleClosedSince(tf, st.lastEvaluatedAt, now, p.bufferLilin)
+}
+
+func isCandleClosedSince(tf string, lastEval, now time.Time, buffer time.Duration) bool {
+	tClose := latestCandleClose(tf, now.Add(-buffer))
+	if tClose.IsZero() {
+		return true
+	}
+	tReady := tClose.Add(buffer)
+	if now.Before(tReady) {
+		return false
+	}
+	return lastEval.Before(tReady)
+}
+
+func latestCandleClose(tf string, t time.Time) time.Time {
+	t = t.UTC()
+	switch tf {
+	case "M5", "5m":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/5)*5, 0, 0, time.UTC)
+	case "M15", "15m":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/15)*15, 0, 0, time.UTC)
+	case "H1", "1H", "1h":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
+	case "H4", "4H", "4h":
+		return time.Date(t.Year(), t.Month(), t.Day(), (t.Hour()/4)*4, 0, 0, 0, time.UTC)
+	case "D", "D1", "1D", "1d":
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	case "W", "W1", "1W", "1w":
+		days := (int(t.Weekday()) + 6) % 7
+		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Time{}
+	}
 }
 
 // statusID membentuk identitas tetap untuk status menunggu satu slot.
@@ -373,6 +460,8 @@ func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result) 
 		out.FinalZoneTP = res.FinalZoneTP
 		out.QuarterInfo = res.QuarterInfo
 		out.SSMTResult = res.SSMTResult
+		out.HTFSweep = res.HTFSweep
+		out.CISD = res.CISD
 	}
 	return out
 }

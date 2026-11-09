@@ -60,6 +60,8 @@ func (e *ila2Evaluator) Evaluate(symbol, htf, ltf string) (*Result, error) {
 		PassedMinRR: setup.PassedMinRR,
 		Summary:     setup.Summary,
 		NextAction:  setup.NextAction,
+		HTFSweep:    setup.HTFSweep,
+		CISD:        setup.CISD,
 	}, nil
 }
 
