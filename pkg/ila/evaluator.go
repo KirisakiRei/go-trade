@@ -23,19 +23,17 @@ func init() {
 }
 
 func formatCandleTime(t time.Time) string {
-	utc := t.UTC().Format("15:04 UTC")
 	if nyLocation != nil {
-		return fmt.Sprintf("%s (%s NY)", utc, t.In(nyLocation).Format("15:04"))
+		return t.In(nyLocation).Format("15:04 NY")
 	}
-	return utc
+	return t.UTC().Add(-5 * time.Hour).Format("15:04 NY")
 }
 
 func formatCandleDateTime(t time.Time) string {
-	utc := t.UTC().Format("02 Jan 15:04 UTC")
 	if nyLocation != nil {
-		return fmt.Sprintf("%s (%s NY)", utc, t.In(nyLocation).Format("15:04"))
+		return t.In(nyLocation).Format("02 Jan 15:04 NY")
 	}
-	return utc
+	return t.UTC().Add(-5 * time.Hour).Format("02 Jan 15:04 NY")
 }
 
 func NewEvaluator() *Evaluator {
