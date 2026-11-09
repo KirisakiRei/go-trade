@@ -15,6 +15,11 @@ type Subscriber struct {
 	ID         string
 	Symbols    map[string]struct{}
 	WantStatus bool
+	// Pairs adalah pasangan timeframe yang ingin dihitung pelanggan ini.
+	//
+	// Nil atau kosong berarti "semua pasangan" — perilaku lama dipertahankan
+	// agar klien yang belum mengirim pairs tidak berubah perilakunya.
+	Pairs []Pair
 	// Send dipanggil untuk setiap sinyal. Harus tidak memblokir lama.
 	Send func(Signal)
 }
@@ -42,6 +47,92 @@ func (r *Registry) Add(s Subscriber) {
 	}
 	copy := s
 	r.subs[s.ID] = &copy
+}
+
+// SetPairs mengganti pasangan timeframe satu pelanggan.
+//
+// Daftar kosong berarti "semua pasangan" dan bukan "tidak ada", supaya Runner
+// yang belum mengatur saklar timeframe tetap menerima sinyal seperti sebelum
+// fitur ini ada.
+func (r *Registry) SetPairs(id string, pairs []Pair) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.subs[id]
+	if !ok {
+		return false
+	}
+	s.Pairs = normalizePairs(pairs)
+	return true
+}
+
+// WantedPairs mengembalikan pasangan timeframe yang perlu dihitung untuk satu
+// simbol, hasil gabungan seluruh pelanggan yang memantau simbol itu.
+//
+// Hasil `false` berarti "tidak ada yang membatasi": engine memakai seluruh
+// pasangan evaluator. Ini terjadi bila belum ada pelanggan yang mengirim pairs,
+// yang memang perilaku awal engine.
+func (r *Registry) WantedPairs(symbol string) ([]Pair, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	adaPermintaan := false
+	seen := make(map[Pair]struct{})
+	for _, s := range r.subs {
+		if _, ok := s.Symbols[symbol]; !ok {
+			continue
+		}
+		if len(s.Pairs) == 0 {
+			// Satu pelanggan saja yang meminta semua pasangan membuat
+			// pembatasan tidak berlaku: sinyalnya harus tetap dihitung.
+			return nil, false
+		}
+		adaPermintaan = true
+		for _, p := range s.Pairs {
+			seen[p] = struct{}{}
+		}
+	}
+	if !adaPermintaan {
+		return nil, false
+	}
+
+	out := make([]Pair, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	// Urutan stabil: evaluasi yang sama tidak boleh menghasilkan susunan
+	// berbeda tiap menit, agar log dan perilaku mudah dibaca.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].HTF == out[j].HTF {
+			return out[i].LTF < out[j].LTF
+		}
+		return out[i].HTF < out[j].HTF
+	})
+	return out, true
+}
+
+// normalizePairs membuang pasangan yang tidak lengkap dan duplikat.
+func normalizePairs(pairs []Pair) []Pair {
+	if len(pairs) == 0 {
+		return nil
+	}
+	seen := make(map[Pair]struct{}, len(pairs))
+	out := make([]Pair, 0, len(pairs))
+	for _, p := range pairs {
+		// HTF dan LTF wajib terisi: pasangan separuh hanya akan gagal
+		// dievaluasi berulang tanpa hasil.
+		if p.HTF == "" || p.LTF == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Remove mencabut pelanggan.

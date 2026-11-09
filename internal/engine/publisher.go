@@ -88,12 +88,45 @@ func (p *Publisher) Scan(ctx context.Context) {
 	}
 
 	for _, symbol := range symbols {
-		for _, pair := range p.eval.Pairs() {
+		for _, pair := range p.pairsFor(symbol) {
 			p.evaluateSlot(ctx, symbol, pair, now)
 		}
 	}
 
 	p.expireAll(now)
+}
+
+// pairsFor menentukan pasangan timeframe yang dihitung untuk satu simbol.
+//
+// Aturan trading tetap pakai: pasangan yang boleh dievaluasi hanya yang ada di
+// daftar evaluator. Permintaan pelanggan HANYA menyaring, tidak pernah
+// menambah. Runner yang meminta pasangan di luar aturan ILA tidak akan membuat
+// engine mengarang setup yang tidak sah.
+func (p *Publisher) pairsFor(symbol string) []Pair {
+	semua := p.eval.Pairs()
+	diminta, dibatasi := p.reg.WantedPairs(symbol)
+	if !dibatasi {
+		return semua
+	}
+
+	sah := make(map[Pair]struct{}, len(semua))
+	for _, pair := range semua {
+		sah[pair] = struct{}{}
+	}
+
+	out := make([]Pair, 0, len(diminta))
+	for _, pair := range diminta {
+		if _, ok := sah[pair]; ok {
+			out = append(out, pair)
+		}
+	}
+	if len(out) == 0 {
+		// Semua permintaan di luar aturan: jangan mengevaluasi apa pun,
+		// tetapi juga jangan diam-diam kembali ke empat pasangan — itu
+		// membuat pemfilteran tampak tidak berfungsi.
+		return nil
+	}
+	return out
 }
 
 // evaluateSlot mengevaluasi satu slot lalu menerbitkan hasilnya.

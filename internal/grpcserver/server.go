@@ -7,6 +7,7 @@ package grpcserver
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,16 +69,19 @@ func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) 
 	}
 
 	symbols := sanitize(req.GetSymbols())
+	pairs := pasanganDari(req.GetPairs())
 	s.reg.Add(engine.Subscriber{
 		ID:         req.GetSubscriberId(),
 		Symbols:    toSet(symbols),
+		Pairs:      pairs,
 		WantStatus: req.GetWantStatusUpdates(),
 		Send:       s.senderFor(req.GetSubscriberId()),
 	})
 
 	log.Info("pelanggan berlangganan",
 		"evt", "subscribe.ok",
-		"subscriber", req.GetSubscriberId(), "symbols", symbols)
+		"subscriber", req.GetSubscriberId(), "symbols", symbols,
+		"pairs", len(pairs))
 
 	return &enginev1.SubscribeResponse{
 		Ok:              true,
@@ -232,6 +236,30 @@ func sanitize(items []string) []string {
 		if it != "" {
 			out = append(out, it)
 		}
+	}
+	return out
+}
+
+// pasanganDari menerjemahkan pasangan timeframe dari kontrak ke bentuk internal.
+//
+// Pasangan yang tidak lengkap dibuang: HTF atau LTF kosong hanya akan gagal
+// dievaluasi dan membanjiri log dengan galat yang sama tiap menit. Daftar
+// kosong dipertahankan sebagai "semua pasangan" sesuai arti di Registry.
+func pasanganDari(in []*enginev1.Pair) []engine.Pair {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]engine.Pair, 0, len(in))
+	for _, p := range in {
+		htf := strings.TrimSpace(p.GetHtf())
+		ltf := strings.TrimSpace(p.GetLtf())
+		if htf == "" || ltf == "" {
+			continue
+		}
+		out = append(out, engine.Pair{HTF: htf, LTF: ltf})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
