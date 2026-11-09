@@ -12,6 +12,32 @@ import (
 // Evaluator provides deterministic evaluation for the Imaginary Liquidity (ILA) method.
 type Evaluator struct{}
 
+var nyLocation *time.Location
+
+func init() {
+	var err error
+	nyLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLocation = time.FixedZone("EST", -5*3600)
+	}
+}
+
+func formatCandleTime(t time.Time) string {
+	utc := t.UTC().Format("15:04 UTC")
+	if nyLocation != nil {
+		return fmt.Sprintf("%s (%s NY)", utc, t.In(nyLocation).Format("15:04"))
+	}
+	return utc
+}
+
+func formatCandleDateTime(t time.Time) string {
+	utc := t.UTC().Format("02 Jan 15:04 UTC")
+	if nyLocation != nil {
+		return fmt.Sprintf("%s (%s NY)", utc, t.In(nyLocation).Format("15:04"))
+	}
+	return utc
+}
+
 func NewEvaluator() *Evaluator {
 	return &Evaluator{}
 }
@@ -187,7 +213,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 					StopLoss:         ck.High,
 					TargetDOL:        ssl,
 					Details: fmt.Sprintf("Candle %s sedang melakukan sweep wick di Bearish FVG (belum ganti candle / masih running). Menunggu candle HTF closed resmi untuk cari entry di candle berikutnya!",
-						ck.Timestamp.Format("02 Jan 15:04")),
+						formatCandleDateTime(ck.Timestamp)),
 				}
 			}
 
@@ -202,7 +228,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 				StopLoss:         ck.High,
 				TargetDOL:        ssl,
 				Details: fmt.Sprintf("Candle %s masuk ke Bearish FVG Terakhir (%.2f - %.2f) dan menyapu High wick candle sebelumnya (%.2f > %.2f). Target DOL: %.2f (SSL).",
-					ck.Timestamp.Format("02 Jan 15:04"), latestFVG.Bottom, latestFVG.Top, ck.High, cPrev.High, ssl),
+					formatCandleDateTime(ck.Timestamp), latestFVG.Bottom, latestFVG.Top, ck.High, cPrev.High, ssl),
 			}
 		}
 
@@ -245,7 +271,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 					StopLoss:         ck.Low,
 					TargetDOL:        bsl,
 					Details: fmt.Sprintf("Candle %s sedang melakukan sweep wick di Bullish FVG (belum ganti candle / masih running). Menunggu candle HTF closed resmi untuk cari entry di candle berikutnya!",
-						ck.Timestamp.Format("02 Jan 15:04")),
+						formatCandleDateTime(ck.Timestamp)),
 				}
 			}
 
@@ -260,7 +286,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 				StopLoss:         ck.Low,
 				TargetDOL:        bsl,
 				Details: fmt.Sprintf("Candle %s masuk ke Bullish FVG Terakhir (%.2f - %.2f) dan menyapu Low wick candle sebelumnya (%.2f < %.2f). Target DOL: %.2f (BSL).",
-					ck.Timestamp.Format("02 Jan 15:04"), latestFVG.Bottom, latestFVG.Top, ck.Low, cPrev.Low, bsl),
+					formatCandleDateTime(ck.Timestamp), latestFVG.Bottom, latestFVG.Top, ck.Low, cPrev.Low, bsl),
 			}
 		}
 	}
@@ -369,7 +395,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			CISDLevel: cisdLevel,
 			ExtremeSL: lowestVal,
 			Details: fmt.Sprintf("Origin penurunan di Candle %s (Open %.2f). Menunggu candle ditutup > %.2f by body (SL: %.2f).",
-				firstBear.Timestamp.Format("15:04"), cisdLevel, cisdLevel, lowestVal),
+				formatCandleTime(firstBear.Timestamp), cisdLevel, cisdLevel, lowestVal),
 		}
 
 		// 4. Cari apakah ada candle closed setelah lowestIdx yang menembus cisdLevel by body
@@ -381,7 +407,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 				cisd.BreakTime = c.Timestamp
 				cisd.EntryPrice = c.Close
 				cisd.Details = fmt.Sprintf("Bullish CISD Valid: Candle %s (Close %.2f) resmi menembus origin bearish %s (Open %.2f) by body! SL di %.2f.",
-					c.Timestamp.Format("15:04"), c.Close, firstBear.Timestamp.Format("15:04"), cisdLevel, lowestVal)
+					formatCandleTime(c.Timestamp), c.Close, formatCandleTime(firstBear.Timestamp), cisdLevel, lowestVal)
 				return cisd, false
 			}
 		}
@@ -461,7 +487,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			CISDLevel: cisdLevel,
 			ExtremeSL: highestVal,
 			Details: fmt.Sprintf("Origin kenaikan di Candle %s (Open %.2f). Menunggu candle ditutup < %.2f by body (SL: %.2f).",
-				firstBull.Timestamp.Format("15:04"), cisdLevel, cisdLevel, highestVal),
+				formatCandleTime(firstBull.Timestamp), cisdLevel, cisdLevel, highestVal),
 		}
 
 		// 4. Cari apakah ada candle closed setelah highestIdx yang menembus cisdLevel by body
@@ -473,7 +499,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 				cisd.BreakTime = c.Timestamp
 				cisd.EntryPrice = c.Close
 				cisd.Details = fmt.Sprintf("Bearish CISD Valid: Candle %s (Close %.2f) resmi menembus origin bullish %s (Open %.2f) by body! SL di %.2f.",
-					c.Timestamp.Format("15:04"), c.Close, firstBull.Timestamp.Format("15:04"), cisdLevel, highestVal)
+					formatCandleTime(c.Timestamp), c.Close, formatCandleTime(firstBull.Timestamp), cisdLevel, highestVal)
 				return cisd, false
 			}
 		}
