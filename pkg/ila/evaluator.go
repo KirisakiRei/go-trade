@@ -115,6 +115,24 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 	latestFVG := activeFVGs[len(activeFVGs)-1]
 
 	for k := n - 1; k > latestFVG.Candle2Index; k-- {
+		// 1. PENCEGAHAN SWEEP ZOMBIE:
+		// Sweep hanya relevan jika terjadi di:
+		// - Candle running saat ini (k == n-1: SweepInProgress)
+		// - Candle yang baru closed (k == n-2: aktif di Candle 5 mencari CISD)
+		// - Candle n-3 (Candle 5 baru saja closed tanpa entry -> dievaluasi EXPIRED di EvaluateILA)
+		// Jika k < n-3, artinya sudah lewat lebih dari 1 candle setelah Candle 5 tutup -> sweep zombie/usang.
+		if k < n-3 {
+			continue
+		}
+
+		// 2. PENCEGAHAN SWEEP PALSU TERHADAP CANDLE 3:
+		// Candle pembentuk FVG adalah Candle 1, 2, dan 3 (latestFVG.Candle3Index).
+		// Candle yang disapu (cPrev = candles[k-1]) TIDAK BOLEH Candle 3 atau sebelumnya.
+		// Minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
+		if k-1 <= latestFVG.Candle3Index {
+			continue
+		}
+
 		ck := candles[k]
 		cPrev := candles[k-1] // Bersebelahan langsung (adjacent)
 
@@ -128,11 +146,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 
 		// 1. BEARISH ILA SWEEP:
 		// - latestFVG is Bearish
-		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom
+		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top
 		// - ck enters FVG: ck.High >= latestFVG.Bottom
 		// - ck sweeps previous ADJACENT wick inside FVG: ck.High > cPrev.High
 		// - ck does NOT close above FVG top (displacement holds): ck.Close <= latestFVG.Top
-		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top {
+		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top {
 			ssl := latestFVG.Bottom
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].Low < ssl {
@@ -145,10 +163,6 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// 1. Belum ada candle berikutnya yang menembus ekor sweep (ck.High)
 			// 2. FVG belum tertutup penuh (candles[post].High >= latestFVG.Top)
 			// 3. Target DOL belum tersentuh/tertembus sebelum entry (candles[post].Low <= ssl)
-			// 4. Batas wajar siklus HTF (maksimal 12 candle HTF sejak sweep)
-			if n-1-k > 12 {
-				continue
-			}
 			invalidated := false
 			for post := k + 1; post < n; post++ {
 				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top || candles[post].Low <= ssl {
@@ -194,11 +208,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 
 		// 2. BULLISH ILA SWEEP:
 		// - latestFVG is Bullish
-		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top
+		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom
 		// - ck enters FVG: ck.Low <= latestFVG.Top
 		// - ck sweeps previous wick low inside FVG: ck.Low < cPrev.Low
 		// - ck does NOT close below FVG bottom: ck.Close >= latestFVG.Bottom
-		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom {
+		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom {
 			bsl := latestFVG.Top
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].High > bsl {
@@ -207,9 +221,6 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			}
 
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
-			if n-1-k > 12 {
-				continue
-			}
 			invalidated := false
 			for post := k + 1; post < n; post++ {
 				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom || candles[post].High >= bsl {
@@ -311,7 +322,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			return nil, true // Invalidated!
 		}
 
-	// 3. Telusuri MUNDUR dari lowestIdx untuk mencari candle bearish PERTAMA dari deretan penurunan ini.
+		// 3. Telusuri MUNDUR dari lowestIdx untuk mencari candle bearish PERTAMA dari deretan penurunan ini.
 		// SYARAT KETAT: Candle origin CISD WAJIB berada di dalam Candle 5 (Timestamp >= afterTime)!
 		// Tidak boleh mengambil origin dari candle sebelum Candle 5 dibuka.
 		// Dan lowestIdx wajib terjadi di dalam Candle 5 (afterTime)
@@ -403,7 +414,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			return nil, true // Invalidated!
 		}
 
-	// 3. Telusuri MUNDUR dari highestIdx untuk mencari candle bullish PERTAMA dari deretan kenaikan ini.
+		// 3. Telusuri MUNDUR dari highestIdx untuk mencari candle bullish PERTAMA dari deretan kenaikan ini.
 		// SYARAT KETAT: Candle origin CISD WAJIB berada di dalam Candle 5 (Timestamp >= afterTime)!
 		// Tidak boleh mengambil origin dari candle sebelum Candle 5 dibuka.
 		// Dan highestIdx wajib terjadi di dalam Candle 5 (afterTime)
@@ -532,8 +543,22 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 		return setup
 	}
 
-	// 2. Tentukan Jendela Waktu & Stop Loss Entry:
-	// Pencarian CISD di LTF dimulai dari saat candle sweep HTF (Candle 4) resmi CLOSED
+	// 2. Batasan Jendela Waktu Candle 5 & Status EXPIRED:
+	lastHTFIdx := len(htfCandles) - 1
+	sweepIdx := sweep.SweepCandleIndex
+	candle5Idx := sweepIdx + 1
+
+	// KASUS 2: Candle 5 sudah CLOSED resmi (kita sudah berada di Candle 6 atau lebih)
+	// Jika Candle 5 tidak melakukan sweep baru terhadap Candle 4, siklus sweep hangus/expired.
+	if candle5Idx < lastHTFIdx {
+		setup.Status = "WAIT_HTF_SWEEP"
+		setup.NextAction = fmt.Sprintf("⏳ Setup sweep di %s telah kadaluarsa (Candle 5 closed tanpa CISD). Menunggu pembentukan sweep baru.", htfName)
+		setup.Summary = fmt.Sprintf("Siklus sweep %s hangus. Harga telah melewati jendela Candle 5.", htfName)
+		return setup
+	}
+
+	// KASUS 1: Kita sedang aktif berada di Candle 5 (candle5Idx == lastHTFIdx)
+	// Jendela pencarian CISD di LTF dimulai dari saat candle sweep HTF (Candle 4) resmi CLOSED
 	// (yaitu sweep.SweepCandle.Timestamp + htfDur) hingga candle yang sedang berjalan.
 	// Stop Loss struktural adalah ekor ekstrem dari Candle Sweep (Candle 4).
 	htfDur := timeframeDuration(htfName)

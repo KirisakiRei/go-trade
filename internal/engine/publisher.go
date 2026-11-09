@@ -130,14 +130,28 @@ func (p *Publisher) pairsFor(symbol string) []Pair {
 	}
 
 	sah := make(map[Pair]struct{}, len(semua))
+	normSah := make(map[string]Pair, len(semua))
 	for _, pair := range semua {
 		sah[pair] = struct{}{}
+		normSah[normTF(pair.HTF)+"|"+normTF(pair.LTF)] = pair
 	}
 
 	out := make([]Pair, 0, len(diminta))
+	seen := make(map[Pair]struct{}, len(diminta))
 	for _, pair := range diminta {
 		if _, ok := sah[pair]; ok {
-			out = append(out, pair)
+			if _, dup := seen[pair]; !dup {
+				seen[pair] = struct{}{}
+				out = append(out, pair)
+			}
+			continue
+		}
+		key := normTF(pair.HTF) + "|" + normTF(pair.LTF)
+		if canon, ok := normSah[key]; ok {
+			if _, dup := seen[canon]; !dup {
+				seen[canon] = struct{}{}
+				out = append(out, canon)
+			}
 		}
 	}
 	if len(out) == 0 {

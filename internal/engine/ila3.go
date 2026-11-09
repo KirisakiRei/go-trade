@@ -8,13 +8,14 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"ila-engine/pkg/indicators"
 	"ila-engine/pkg/marketfeed"
 	"ila-engine/pkg/sequence"
 )
 
-// ila3Preset adalah pasangan timeframe ILA 3.0, sama dengan cmd/ila3-scanner.
+// ila3Preset adalah pasangan timeframe ILA 3.0 untuk setiap siklus Quarterly Theory.
 type ila3Preset struct {
 	Mode string
 	HTF  string
@@ -22,9 +23,34 @@ type ila3Preset struct {
 	LTF  string
 }
 
+// normTF membakukan penulisan timeframe agar toleran terhadap berbagai format (mis. H4 vs 4H, M15 vs 15m).
+func normTF(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	switch s {
+	case "H4", "4H":
+		return "4H"
+	case "H1", "1H":
+		return "1H"
+	case "M15", "15M":
+		return "15M"
+	case "M5", "5M":
+		return "5M"
+	case "M1", "1M":
+		return "1M"
+	case "D1", "1D", "D":
+		return "D"
+	case "W1", "1W", "W":
+		return "W"
+	default:
+		return s
+	}
+}
+
 var ila3Presets = []ila3Preset{
-	{Mode: "New Day", HTF: "4H", MTF: "1H", LTF: "5m"},
-	{Mode: "New Week", HTF: "D", MTF: "4H", LTF: "15m"},
+	{Mode: "Daily Cycle (New Day)", HTF: "4H", MTF: "1H", LTF: "5m"},
+	{Mode: "Weekly Cycle (New Week)", HTF: "D", MTF: "4H", LTF: "15m"},
+	{Mode: "90M Cycle (Intraday)", HTF: "1H", MTF: "15m", LTF: "5m"},
+	{Mode: "Monthly Cycle (New Month)", HTF: "W", MTF: "4H", LTF: "1H"},
 }
 
 // CorrelationMap memasangkan simbol dengan pembanding SMT-nya.
@@ -48,12 +74,13 @@ func NewILA3Evaluator(feed marketfeed.Provider) Evaluator {
 	e := &ila3Evaluator{
 		feed:     feed,
 		eval:     sequence.NewEvaluator(),
-		presetOf: make(map[string]ila3Preset, len(ila3Presets)),
+		presetOf: make(map[string]ila3Preset, len(ila3Presets)*2),
 	}
-	// Slot dikunci per (htf, ltf) agar bisa dipetakan balik ke preset saat evaluasi.
-	seen := make(map[string]ila3Preset, len(ila3Presets))
+	// Slot dikunci per (htf, ltf) dan bentuk normalisasinya agar bisa dipetakan balik ke preset saat evaluasi.
+	seen := make(map[string]ila3Preset, len(ila3Presets)*2)
 	for _, p := range ila3Presets {
 		seen[p.HTF+"|"+p.LTF] = p
+		seen[normTF(p.HTF)+"|"+normTF(p.LTF)] = p
 	}
 	e.presetOf = seen
 	for _, p := range ila3Presets {
@@ -68,6 +95,9 @@ func (e *ila3Evaluator) Pairs() []Pair { return e.pairs }
 
 func (e *ila3Evaluator) Evaluate(symbol, htf, ltf string) (*Result, error) {
 	preset, ok := e.presetOf[htf+"|"+ltf]
+	if !ok {
+		preset, ok = e.presetOf[normTF(htf)+"|"+normTF(ltf)]
+	}
 	if !ok {
 		return nil, fmt.Errorf("pasangan timeframe ILA 3.0 tidak dikenal: %s->%s", htf, ltf)
 	}

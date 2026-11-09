@@ -17,6 +17,38 @@ func NewCalculator() *Calculator {
 	return &Calculator{nyLocation: loc}
 }
 
+// Location returns the America/New_York timezone location used for calculations.
+func (c *Calculator) Location() *time.Location {
+	return c.nyLocation
+}
+
+// GetCandleQuarter returns the Daily quarter name ("Q1", "Q2", "Q3", "Q4") for a given timestamp in America/New_York.
+func (c *Calculator) GetCandleQuarter(t time.Time) string {
+	qInfo := c.GetDailyQuarter(t)
+	return string(qInfo.Quarter)
+}
+
+// GetCandleQuarter converts a timestamp to America/New_York and returns the Daily quarter string ("Q1", "Q2", "Q3", "Q4").
+func GetCandleQuarter(t time.Time) string {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.FixedZone("EDT", -4*3600)
+	}
+	nyTime := t.In(loc)
+	hour := nyTime.Hour()
+
+	switch {
+	case hour >= 18 && hour < 24:
+		return string(QuarterQ1)
+	case hour >= 0 && hour < 6:
+		return string(QuarterQ2)
+	case hour >= 6 && hour < 12:
+		return string(QuarterQ3)
+	default:
+		return string(QuarterQ4)
+	}
+}
+
 // GetDailyQuarter determines the current 6-hour Daily quarter based on New York Time
 // Q1: 18:00 - 00:00 NY (Asia)
 // Q2: 00:00 - 06:00 NY (London)

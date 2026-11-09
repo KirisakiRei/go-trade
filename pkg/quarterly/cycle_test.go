@@ -57,3 +57,43 @@ func TestQ1ExceptionRule(t *testing.T) {
 		t.Errorf("expected Q1 exception to be FALSE in Q2")
 	}
 }
+
+func TestGetCandleQuarter(t *testing.T) {
+	calc := NewCalculator()
+
+	// 20:00 NY -> "Q1"
+	tQ1 := time.Date(2026, 11, 5, 20, 0, 0, 0, calc.nyLocation)
+	if got := calc.GetCandleQuarter(tQ1); got != "Q1" {
+		t.Errorf("calc.GetCandleQuarter(tQ1) = %s, want Q1", got)
+	}
+	if got := GetCandleQuarter(tQ1); got != "Q1" {
+		t.Errorf("GetCandleQuarter(tQ1) = %s, want Q1", got)
+	}
+
+	// 03:00 NY -> "Q2"
+	tQ2 := time.Date(2026, 11, 6, 3, 0, 0, 0, calc.nyLocation)
+	if got := calc.GetCandleQuarter(tQ2); got != "Q2" {
+		t.Errorf("calc.GetCandleQuarter(tQ2) = %s, want Q2", got)
+	}
+	if got := GetCandleQuarter(tQ2); got != "Q2" {
+		t.Errorf("GetCandleQuarter(tQ2) = %s, want Q2", got)
+	}
+
+	// 08:30 NY -> "Q3"
+	tQ3 := time.Date(2026, 11, 6, 8, 30, 0, 0, calc.nyLocation)
+	if got := calc.GetCandleQuarter(tQ3); got != "Q3" {
+		t.Errorf("calc.GetCandleQuarter(tQ3) = %s, want Q3", got)
+	}
+	if got := GetCandleQuarter(tQ3); got != "Q3" {
+		t.Errorf("GetCandleQuarter(tQ3) = %s, want Q3", got)
+	}
+
+	// 16:00 NY -> "Q4"
+	tQ4 := time.Date(2026, 11, 6, 16, 0, 0, 0, calc.nyLocation)
+	if got := calc.GetCandleQuarter(tQ4); got != "Q4" {
+		t.Errorf("calc.GetCandleQuarter(tQ4) = %s, want Q4", got)
+	}
+	if got := GetCandleQuarter(tQ4); got != "Q4" {
+		t.Errorf("GetCandleQuarter(tQ4) = %s, want Q4", got)
+	}
+}

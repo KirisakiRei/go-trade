@@ -31,6 +31,7 @@ const (
 	StateExpansion2Active   SequenceState = "EXPANSION_2_ACTIVE"
 	StateTargetReached      SequenceState = "TARGET_REACHED"
 	StateInvalidated        SequenceState = "INVALIDATED"
+	StateExpired            SequenceState = "EXPIRED"
 )
 
 type NestedExecutionInfo struct {
@@ -45,29 +46,29 @@ type NestedExecutionInfo struct {
 }
 
 type ILA3SequenceSetup struct {
-	Symbol           string                    `json:"symbol"`
-	HTF              string                    `json:"htf"`
-	MTF              string                    `json:"mtf"`
-	LTF              string                    `json:"ltf"`
-	Bias             string                    `json:"bias"` // BULLISH or BEARISH
-	State            SequenceState             `json:"state"`
-	SetupType        SetupType                 `json:"setup_type"`
-	QuarterInfo      quarterly.QuarterInfo     `json:"quarter_info"`
-	IsQ1Bypass       bool                      `json:"is_q1_bypass"`
-	SSMTResult       ssmt.SSMTResult           `json:"ssmt_result"`
-	HTFStartLevel    *keylevels.ERL            `json:"htf_start_level,omitempty"`
-	HTFTargetLevel   *keylevels.ERL            `json:"htf_target_level,omitempty"`
-	MTFKeyLevel      *keylevels.ERL            `json:"mtf_key_level,omitempty"`
-	MTFFVGRetrace    *keylevels.IRL            `json:"mtf_fvg_retrace,omitempty"`
-	EntryPrice       float64                   `json:"entry_price"`
-	StopLoss         float64                   `json:"stop_loss"`
-	TakeProfit       float64                   `json:"take_profit"`
-	RiskReward       float64                   `json:"risk_reward"`
-	NestedExecution  *NestedExecutionInfo      `json:"nested_execution,omitempty"`
-	CrossTFValid     bool                      `json:"cross_tf_valid"`
-	WaypointFVG      *keylevels.IRL            `json:"waypoint_fvg,omitempty"`
-	StDevProjections *stdev.ProjectionLevels   `json:"stdev_projections,omitempty"`
-	EvaluatedAt      time.Time                 `json:"evaluated_at"`
-	Summary          string                    `json:"summary"`
-	NextAction       string                    `json:"next_action"`
+	Symbol           string                  `json:"symbol"`
+	HTF              string                  `json:"htf"`
+	MTF              string                  `json:"mtf"`
+	LTF              string                  `json:"ltf"`
+	Bias             string                  `json:"bias"` // BULLISH or BEARISH
+	State            SequenceState           `json:"state"`
+	SetupType        SetupType               `json:"setup_type"`
+	QuarterInfo      quarterly.QuarterInfo   `json:"quarter_info"`
+	IsQ1Bypass       bool                    `json:"is_q1_bypass"`
+	SSMTResult       ssmt.SSMTResult         `json:"ssmt_result"`
+	HTFStartLevel    *keylevels.ERL          `json:"htf_start_level,omitempty"`
+	HTFTargetLevel   *keylevels.ERL          `json:"htf_target_level,omitempty"`
+	MTFKeyLevel      *keylevels.ERL          `json:"mtf_key_level,omitempty"`
+	MTFFVGRetrace    *keylevels.IRL          `json:"mtf_fvg_retrace,omitempty"`
+	EntryPrice       float64                 `json:"entry_price"`
+	StopLoss         float64                 `json:"stop_loss"`
+	TakeProfit       float64                 `json:"take_profit"`
+	RiskReward       float64                 `json:"risk_reward"`
+	NestedExecution  *NestedExecutionInfo    `json:"nested_execution,omitempty"`
+	CrossTFValid     bool                    `json:"cross_tf_valid"`
+	WaypointFVG      *keylevels.IRL          `json:"waypoint_fvg,omitempty"`
+	StDevProjections *stdev.ProjectionLevels `json:"stdev_projections,omitempty"`
+	EvaluatedAt      time.Time               `json:"evaluated_at"`
+	Summary          string                  `json:"summary"`
+	NextAction       string                  `json:"next_action"`
 }

@@ -88,10 +88,17 @@ func main() {
 		pairs := engine.ILA2Pairs
 		hasil := map[string]*engine.Result{"H4|M15": engine.DemoResult()}
 		if *strategy == "ila-3.0" {
-			pairs = []engine.Pair{{HTF: "4H", LTF: "5m"}, {HTF: "D", LTF: "15m"}}
+			pairs = []engine.Pair{
+				{HTF: "4H", LTF: "5m"},
+				{HTF: "D", LTF: "15m"},
+				{HTF: "1H", LTF: "5m"},
+				{HTF: "W", LTF: "1H"},
+			}
 			hasil = map[string]*engine.Result{
 				"4H|5m": engine.DemoResult(),
 				"D|15m": engine.DemoResult(),
+				"1H|5m": engine.DemoResult(),
+				"W|1H":  engine.DemoResult(),
 			}
 		}
 		evaluator = engine.NewUjiEvaluator(*strategy, pairs, hasil)
