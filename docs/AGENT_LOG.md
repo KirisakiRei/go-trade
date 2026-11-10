@@ -242,6 +242,21 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] PERBAIKAN — Penyelarasan Penjadwalan Penutupan Lilin H4 & D1 ke New York Close (Engine Publisher)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN / ENGINE SCHEDULER
+- **Status:** 🟢 SELESAI (Diajukan via PR #2)
+- **Ringkasan:**
+  - **Akar Masalah:**
+    Fungsi `latestCandleClose` pada `internal/engine/publisher.go` sebelumnya menggunakan formula `(t.Hour()/4)*4` UTC murni (berasumsi lilin H4 tutup pada jam genap 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC). Padahal di pasar forex/CFD dan TradingView, penutupan lilin H4 berpatokan pada **New York Close (17:00 NY = 01:00, 05:00, 09:00, 13:00, 17:00, 21:00 NY, atau 02:00, 06:00, 10:00, 14:00, 18:00, 22:00 UTC)**.
+    Akibatnya, pada momen lilin H4 jam 06:00 UTC (01:00 NY) resmi tutup, scheduler mengira lilin tutup jam 04:00 UTC sehingga evaluasi tertunda 2 jam (delay) dan melewatkan momen validasi HTF.
+  - **Solusi:**
+    Formula `latestCandleClose` diselaraskan dengan zona waktu New York (`America/New_York`) mengikuti siklus 4-jam New York Close, serta D1 pada jam 17:00 NY, konsisten dengan standarisasi waktu di commit `d54937c`.
+  - **Pengujian:**
+    Memperbarui `internal/engine/publisher_test.go` untuk memverifikasi penutupan H4 jam 14:00:04 UTC (09:00 NY) (PASS 100%).
+
+---
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
