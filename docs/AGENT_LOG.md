@@ -242,6 +242,27 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] PERBAIKAN — Format Alert HTF-MTF-LTF First & Pemilihan FVG Terakhir Murni (ILA 3.0 & ILA 2.0)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN / FORMATTING
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Koreksi Fatal Logika FVG ILA 3.0 (`pkg/sequence/evaluator.go`):**
+    - **Akar Masalah:** Evaluator ILA 3.0 sebelumnya melakukan looping mundur ke seluruh FVG historis (`for i := len(htfIRLs)-1; i >= 0; i--`). Akibatnya, pada USTEC 4H, sistem melewati FVG Bullish terbaru (`27275.40 - 27786.75` tanggal 09 Nov) dan justru mengaitkan harga ke FVG Bearish usang (`27066.85 - 28161.85` tanggal 05 Nov) hanya karena rentang harga kebetulan berada di dalamnya. Hal ini memicu false signal SELL.
+    - **Perbaikan:** Menyelaraskan 100% dengan prinsip ILA 2.0: Evaluator kini **secara ketat HANYA menggunakan FVG aktif TERAKHIR** (`GetLatestActiveIRL`). Jika FVG terakhir adalah Bullish, maka dealing range murni Bullish dan sistem tidak boleh melompat ke FVG Bearish lampau. Demikian juga pada MTF Retracement Entry 2, FVG aktif wajib yang terakhir dan bertipe selaras dengan bias.
+  - **Penyelarasan Urutan Pesan Alert Telegram (`cmd/scanner` & `cmd/ila3-scanner`):**
+    - Menyusun ulang struktur pesan ketika ada setup valid / order real:
+      1. Header & Timeframe Slot
+      2. 🏛️ **STRUKTUR HTF**, 🧱 **DEALING RANGE MTF**, ⚡ **TRIGGER LTF** (Ditampilkan di AWAL sebagai alasan teknikal).
+      3. 📊 **Tabel Box ASCII** (Order Box / Parameter Entry, SL, TP, R:R, Lot).
+      4. 🛑 **STATUS AUTO-EKSEKUSI** (Alasan Lock / Hold jika tertahan).
+      5. 👉 **ACTION PLAN & TRADING STEPS**.
+  - **Verifikasi & Build:**
+    - Uji probe USTEC: Status kembali netral `WAIT_MTF_REVERSAL` tanpa false SELL.
+    - Seluruh unit test PASS 100%. Kompilasi binary dan restart server 8080 & 8082 berjalan lancar.
+
+---
+
 ### [2026-11-10] PERBAIKAN — Timeframe Slot ILA 2.0 (H4-M15 & H1-M5), ILA 3.0 Daily Macro (D-4H-15m), & Fix cTrader Context Deadline
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN / KONFIGURASI

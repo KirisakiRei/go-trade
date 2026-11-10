@@ -564,8 +564,16 @@ func main() {
 								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
 							)
 							actionPlan := getILA2ActionPlan("DAILY_TRADE_LOCK", ep.HTF, ep.LTF, setup.Bias)
-							msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, tradeLockReason, actionPlan)
+							msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
+								"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+								"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+								"%s\n\n"+
+								"🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n"+
+								"👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+								ep.HTF, setup.HTFSweep.Details,
+								ep.LTF, setup.CISD.Details,
+								table, tradeLockReason, actionPlan)
 							messages = append(messages, msg)
 							prevILA.LastBreakTime = breakTimeStr
 							prevILA.LastStatus = "DAILY_TRADE_LOCK"
@@ -590,8 +598,16 @@ func main() {
 								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
 							)
 							actionPlan := getILA2ActionPlan("OPEN_POS_HOLD", ep.HTF, ep.LTF, setup.Bias)
-							msg := fmt.Sprintf("⏳ **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n⚠️ **AUTO-EKSEKUSI DITAHAN:**\n• Masih ada posisi aktif ILA (#%s %s %.2f lot).\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize, actionPlan)
+							msg := fmt.Sprintf("⏳ **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
+								"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+								"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+								"%s\n\n"+
+								"⚠️ **AUTO-EKSEKUSI DITAHAN:**\n• Masih ada posisi aktif ILA (#%s %s %.2f lot).\n\n"+
+								"👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+								ep.HTF, setup.HTFSweep.Details,
+								ep.LTF, setup.CISD.Details,
+								table, existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize, actionPlan)
 							messages = append(messages, msg)
 							prevILA.LastBreakTime = breakTimeStr
 							prevILA.LastStatus = "OPEN_POS_HOLD"
@@ -611,8 +627,15 @@ func main() {
 							fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
 						)
 						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
-						msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - MODE PANTAU] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
-							symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, actionPlan)
+						msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - MODE PANTAU] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
+							"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+							"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+							"%s\n\n"+
+							"👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+							symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+							ep.HTF, setup.HTFSweep.Details,
+							ep.LTF, setup.CISD.Details,
+							table, actionPlan)
 						messages = append(messages, msg)
 						prevILA.LastStatus = "READY_TO_ENTRY"
 						state.ILAPairs[ilaKey] = prevILA
@@ -662,8 +685,15 @@ func main() {
 							fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", riskPercent, riskDollars, lot),
 						)
 						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
-						entryAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 2.0] %s %s • %s**\n\n%s\n\n⚡ **KONDISI STRUKTUR PASAR:**\n• **HTF (%s):** %s\n• **LTF (%s):** %s\n\n👉 **TRADING ACTION PLAN & MANAGEMENT:**\n• %s",
-							symEmoji, symName, dirEmoji, table, ep.HTF, setup.HTFSweep.Details, ep.LTF, setup.CISD.Details, actionPlan)
+						entryAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 2.0] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
+							"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+							"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+							"%s\n\n"+
+							"👉 **TRADING ACTION PLAN & MANAGEMENT:**\n• %s",
+							symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
+							ep.HTF, setup.HTFSweep.Details,
+							ep.LTF, setup.CISD.Details,
+							table, actionPlan)
 						messages = append(messages, entryAlert)
 
 						prevILA.LastBreakTime = breakTimeStr

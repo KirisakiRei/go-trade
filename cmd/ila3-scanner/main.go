@@ -462,6 +462,14 @@ func main() {
 					dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(dailyCtx, time.Now())
 					dailyCancel()
 
+					htfDesc := setup.Summary
+					ssmtText := "Netral (Kedua instrumen seirama)"
+					if setup.SSMTResult.Detected {
+						ssmtText = fmt.Sprintf("💎 %s (%s vs %s)", setup.SSMTResult.Type, sym, corrSym)
+					}
+					mtfDesc := fmt.Sprintf("Dealing Range %s aktif. SSMT Correlation: %s.", ps.MTF, ssmtText)
+					ltfDesc := fmt.Sprintf("Sniper Mode lilin %s aktif. Trigger CISD terkonfirmasi by body.", ps.LTF)
+
 					if dailyStatus != nil && !dailyStatus.CanTrade {
 						lockKey := sym + "-LOCK"
 						if prevState.LastState != lockKey {
@@ -476,8 +484,18 @@ func main() {
 								"1.00% Live Equity",
 							)
 							actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
-							msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - ENTRY MANUAL] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n%s\n\n🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
-								sEmoji, sName, dirEmoji, ps.ModeName, ps.HTF, ps.MTF, ps.LTF, table, dailyStatus.LockReason, actionPlan)
+							msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - ENTRY MANUAL] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n"+
+								"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+								"🧱 **DEALING RANGE MTF (%s):**\n• %s\n\n"+
+								"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+								"%s\n\n"+
+								"🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n"+
+								"👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+								sEmoji, sName, dirEmoji, ps.ModeName, ps.HTF, ps.MTF, ps.LTF,
+								ps.HTF, htfDesc,
+								ps.MTF, mtfDesc,
+								ps.LTF, ltfDesc,
+								table, dailyStatus.LockReason, actionPlan)
 							messages = append(messages, msg)
 							prevState.LastState = lockKey
 							state.Pairs[key] = prevState
@@ -497,8 +515,17 @@ func main() {
 							"1.00% Live Equity",
 						)
 						actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
-						msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - MODE PANTAU] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n%s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
-							sEmoji, sName, dirEmoji, ps.ModeName, ps.HTF, ps.MTF, ps.LTF, table, actionPlan)
+						msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - MODE PANTAU] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n"+
+							"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+							"🧱 **DEALING RANGE MTF (%s):**\n• %s\n\n"+
+							"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+							"%s\n\n"+
+							"👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+							sEmoji, sName, dirEmoji, ps.ModeName, ps.HTF, ps.MTF, ps.LTF,
+							ps.HTF, htfDesc,
+							ps.MTF, mtfDesc,
+							ps.LTF, ltfDesc,
+							table, actionPlan)
 						messages = append(messages, msg)
 						prevState.LastState = "ENTRY"
 						state.Pairs[key] = prevState
@@ -584,8 +611,17 @@ func main() {
 						}
 
 						actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
-						execAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 3.0] %s %s • %s**\n`Hierarki: %s (HTF) ➡️ %s (MTF) ➡️ %s (LTF)`\n\n%s%s\n\n👉 **TRADING ACTION PLAN & MANAGEMENT:**\n• %s",
-							sEmoji, sName, dirEmoji, ps.HTF, ps.MTF, ps.LTF, table, stdevText, actionPlan)
+						execAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 3.0] %s %s • %s**\n`Hierarki: %s (HTF) ➡️ %s (MTF) ➡️ %s (LTF)`\n\n"+
+							"🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n"+
+							"🧱 **DEALING RANGE MTF (%s):**\n• %s\n\n"+
+							"⚡ **TRIGGER LTF (%s):**\n• %s\n\n"+
+							"%s%s\n\n"+
+							"👉 **TRADING ACTION PLAN & MANAGEMENT:**\n• %s",
+							sEmoji, sName, dirEmoji, ps.HTF, ps.MTF, ps.LTF,
+							ps.HTF, htfDesc,
+							ps.MTF, mtfDesc,
+							ps.LTF, ltfDesc,
+							table, stdevText, actionPlan)
 						messages = append(messages, execAlert)
 
 						prevState.LastState = "ENTRY"
