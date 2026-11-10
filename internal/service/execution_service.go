@@ -137,7 +137,7 @@ func (s *executionService) CheckAndManagePositions(ctx context.Context) error {
 				closedMtr, err := mb.GetClosedPositions(ctx, time.Now().Add(-24*time.Hour), time.Now())
 				if err == nil {
 					for _, cp := range closedMtr {
-						if cp.ID == mtrID {
+						if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
 							exitPrice = cp.ClosePrice
 							actualPnL = cp.Profit
 							isDealFound = true
@@ -145,6 +145,11 @@ func (s *executionService) CheckAndManagePositions(ctx context.Context) error {
 						}
 					}
 				}
+			}
+
+			// Defensive gate: Jika deal penutup belum ditemukan dari broker, jangan tutup prematur di database!
+			if !isDealFound {
+				continue
 			}
 
 			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
