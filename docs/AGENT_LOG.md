@@ -242,6 +242,22 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] SYNC BRANCH HERMES — Porting Perbaikan Aturan Trading (ILA 2.0 & ILA 3.0) dari develop ke branch hermes
+- **Pelaku:** Hermes
+- **Tipe:** FITUR / PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - Membuat branch mandiri `hermes` khusus untuk sistem eksekusi & testing langsung di server Hermes.
+  - Mengadopsi 100% perbaikan logika trading dari branch `develop` tanpa membawa dependensi gRPC/Runner yang bisa memutus alur standalone:
+    - `pkg/ila/evaluator.go`: Cegah sweep palsu terhadap Candle 3 pembentuk FVG, filter zombie sweep (>3 candle), dan terapkan batas kadaluarsa Candle 5 (Expired jika Candle 5 closed tanpa CISD dan tanpa sweep baru).
+    - `pkg/sequence/evaluator.go`: Anchored CISD sejak waktu sweep MTF/QT, batasan kadaluarsa sesi sore Q4 (>=15:00 NY), penjepitan Take Profit StDev Fibo Level -2.0 ke rasio R:R terukur (1:2.5 s.d. 1:4.5), dan SL Floor per instrumen.
+    - `pkg/keylevels/detector.go`: Standardisasi fraktal multi-bar 5-bar ERL (Swing High/Low) dan aturan 100% fully filled IRL (FVG).
+    - `pkg/quarterly/cycle.go`: Standarisasi konversi waktu New York Time (`America/New_York`) untuk kuartal Q1-Q4.
+  - Seluruh unit test PASS 100%. Rebuild ke-6 binary standalone (`ila-cli`, `ila-scanner`, `ila-server`, `ila3-cli`, `ila3-scanner`, `ila3-server`).
+  - Server daemon 8080 & 8082 di-restart dan merespons normal.
+
+---
+
 ### [2026-11-09] PERBAIKAN — Log pindah ke folder asli VPS, tahan container dihapus
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN

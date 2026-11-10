@@ -12,25 +12,28 @@ func NewDetector() *Detector {
 }
 
 // FindERLs extracts all Swing Highs and Swing Lows (External Range Liquidity)
+// Menggunakan standar fraktal multi-bar ICT 5-bar (2 candle kiri dan 2 candle kanan).
 func (d *Detector) FindERLs(candles []indicators.Candle) []ERL {
 	n := len(candles)
-	if n < 3 {
+	if n < 5 {
 		return nil
 	}
 
 	var erls []ERL
 
-	for i := 1; i < n-1; i++ {
-		cPrev := candles[i-1]
+	for i := 2; i < n-2; i++ {
 		cCurr := candles[i]
-		cNext := candles[i+1]
 
 		if !cCurr.IsClosed {
 			continue
 		}
 
-		// Swing High
-		if cCurr.High > cPrev.High && cCurr.High > cNext.High {
+		// Swing High (Fraktal 5-Bar: 2 bar kiri dan 2 bar kanan lebih rendah)
+		if cCurr.High > candles[i-2].High &&
+			cCurr.High > candles[i-1].High &&
+			cCurr.High > candles[i+1].High &&
+			cCurr.High > candles[i+2].High {
+
 			erl := ERL{
 				Type:        TypeERLSwingHigh,
 				Price:       cCurr.High,
@@ -50,8 +53,12 @@ func (d *Detector) FindERLs(candles []indicators.Candle) []ERL {
 			erls = append(erls, erl)
 		}
 
-		// Swing Low
-		if cCurr.Low < cPrev.Low && cCurr.Low < cNext.Low {
+		// Swing Low (Fraktal 5-Bar: 2 bar kiri dan 2 bar kanan lebih tinggi)
+		if cCurr.Low < candles[i-2].Low &&
+			cCurr.Low < candles[i-1].Low &&
+			cCurr.Low < candles[i+1].Low &&
+			cCurr.Low < candles[i+2].Low {
+
 			erl := ERL{
 				Type:        TypeERLSwingLow,
 				Price:       cCurr.Low,
@@ -76,6 +83,10 @@ func (d *Detector) FindERLs(candles []indicators.Candle) []ERL {
 }
 
 // FindIRLs extracts all Fair Value Gaps (Internal Range Liquidity)
+// Aturan baku ILA 3.0:
+// - Bullish FVG: Lantai = High Candle 1, Atap = Low Candle 3, Candle 2 wajib displacement.
+// - Bearish FVG: Atap = Low Candle 1, Lantai = High Candle 3, Candle 2 wajib displacement.
+// - FVG baru gugur (Mitigated / Fully Filled) HANYA jika harga telah 100% fully filled melewati batas seberang FVG.
 func (d *Detector) FindIRLs(candles []indicators.Candle) []IRL {
 	n := len(candles)
 	if n < 3 {
@@ -93,57 +104,59 @@ func (d *Detector) FindIRLs(candles []indicators.Candle) []IRL {
 			continue
 		}
 
-		// Bearish FVG: Low(C1) > High(C3) and C2 is Bearish
+		// Bearish FVG: Low(C1) > High(C3) and C2 is Bearish displacement
 		if c1.Low > c3.High && c2.Close < c2.Open {
 			irl := IRL{
 				Type:        TypeIRLBearish,
-				Top:          c1.Low,
-				Bottom:       c3.High,
-				Candle1Time:  c1.Timestamp,
-				Candle2Time:  c2.Timestamp,
-				Candle3Time:  c3.Timestamp,
+				Top:         c1.Low,  // Atap FVG
+				Bottom:      c3.High, // Lantai FVG
+				Candle1Time: c1.Timestamp,
+				Candle2Time: c2.Timestamp,
+				Candle3Time: c3.Timestamp,
 				CandleIndex: i,
 			}
+			// FVG baru gugur jika tertutup penuh (100% fully filled) melewati atap (Top)
 			for k := i + 1; k < n; k++ {
 				ck := candles[k]
 				if ck.Close > irl.Top {
 					irl.Invalidated = true
+					irl.FullyFilled = true
+					irl.Mitigated = true
 					break
 				}
 				if ck.High >= irl.Top {
 					irl.FullyFilled = true
 					irl.Mitigated = true
 					break
-				} else if ck.High >= irl.Bottom {
-					irl.Mitigated = true
 				}
 			}
 			irls = append(irls, irl)
 		}
 
-		// Bullish FVG: High(C1) < Low(C3) and C2 is Bullish
+		// Bullish FVG: High(C1) < Low(C3) and C2 is Bullish displacement
 		if c1.High < c3.Low && c2.Close > c2.Open {
 			irl := IRL{
 				Type:        TypeIRLBullish,
-				Top:          c3.Low,
-				Bottom:       c1.High,
-				Candle1Time:  c1.Timestamp,
-				Candle2Time:  c2.Timestamp,
-				Candle3Time:  c3.Timestamp,
+				Top:         c3.Low,  // Atap FVG
+				Bottom:      c1.High, // Lantai FVG
+				Candle1Time: c1.Timestamp,
+				Candle2Time: c2.Timestamp,
+				Candle3Time: c3.Timestamp,
 				CandleIndex: i,
 			}
+			// FVG baru gugur jika tertutup penuh (100% fully filled) melewati lantai (Bottom)
 			for k := i + 1; k < n; k++ {
 				ck := candles[k]
 				if ck.Close < irl.Bottom {
 					irl.Invalidated = true
+					irl.FullyFilled = true
+					irl.Mitigated = true
 					break
 				}
 				if ck.Low <= irl.Bottom {
 					irl.FullyFilled = true
 					irl.Mitigated = true
 					break
-				} else if ck.Low <= irl.Top {
-					irl.Mitigated = true
 				}
 			}
 			irls = append(irls, irl)

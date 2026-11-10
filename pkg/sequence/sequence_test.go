@@ -1,6 +1,7 @@
 package sequence
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -56,5 +57,91 @@ func TestSequenceEvaluation(t *testing.T) {
 			t.Errorf("in bearish projection, Level -2 (%.5f) should be below entry price (%.5f)",
 				setup.StDevProjections.LevelMinus2, setup.EntryPrice)
 		}
+	}
+}
+
+func TestSequenceLateQ4Expiration(t *testing.T) {
+	eval := NewEvaluator()
+	nyLoc := eval.qtCalc.Location()
+
+	// Buat waktu candle di sesi penutupan Q4 sore (16:00 NY)
+	tQ4Late := time.Date(2026, 11, 6, 16, 0, 0, 0, nyLoc)
+
+	htf := []indicators.Candle{
+		{Timestamp: tQ4Late.Add(-120 * time.Hour), High: 100, Low: 90, Close: 95, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-96 * time.Hour), High: 105, Low: 95, Close: 100, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-72 * time.Hour), High: 110, Low: 100, Close: 105, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-48 * time.Hour), High: 105, Low: 98, Close: 102, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-24 * time.Hour), High: 104, Low: 99, Close: 101, IsClosed: true},
+		{Timestamp: tQ4Late, High: 112, Low: 100, Close: 108, IsClosed: true},
+	}
+	mtf := []indicators.Candle{
+		{Timestamp: tQ4Late.Add(-20 * time.Hour), High: 105, Low: 95, Close: 100, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-16 * time.Hour), High: 106, Low: 96, Close: 101, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-12 * time.Hour), High: 111, Low: 100, Close: 105, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-8 * time.Hour), High: 107, Low: 98, Close: 103, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-4 * time.Hour), High: 108, Low: 99, Close: 104, IsClosed: true},
+		{Timestamp: tQ4Late, High: 112, Low: 100, Close: 107, IsClosed: true},
+	}
+	ltf := []indicators.Candle{
+		{Timestamp: tQ4Late.Add(-45 * time.Minute), Open: 105, High: 106, Low: 104, Close: 105.5, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-30 * time.Minute), Open: 105.5, High: 107, Low: 105, Close: 106.8, IsClosed: true},
+		{Timestamp: tQ4Late.Add(-15 * time.Minute), Open: 106.8, High: 107, Low: 103, Close: 103.5, IsClosed: true},
+		{Timestamp: tQ4Late, Open: 103.5, High: 104, Low: 103, Close: 103.8, IsClosed: true},
+		{Timestamp: tQ4Late, Open: 103.8, High: 104, Low: 103.5, Close: 103.6, IsClosed: true},
+	}
+
+	setup := eval.EvaluateSequence(htf, mtf, ltf, nil, "D", "4H", "15m", "EURUSD", "")
+	if setup.State != StateExpired {
+		t.Errorf("expected StateExpired in late Q4 (16:00 NY), got %s", setup.State)
+	}
+}
+
+func TestGoldSLFloorAndRRClamp(t *testing.T) {
+	eval := NewEvaluator()
+	nyLoc := eval.qtCalc.Location()
+
+	// Sesi Q3 (09:00 NY)
+	tQ3 := time.Date(2026, 11, 6, 9, 0, 0, 0, nyLoc)
+
+	htf := []indicators.Candle{
+		{Timestamp: tQ3.Add(-120 * time.Hour), High: 2700, Low: 2680, Close: 2690, IsClosed: true},
+		{Timestamp: tQ3.Add(-96 * time.Hour), High: 2710, Low: 2690, Close: 2700, IsClosed: true},
+		{Timestamp: tQ3.Add(-72 * time.Hour), High: 2750, Low: 2710, Close: 2740, IsClosed: true}, // Swing High 2750
+		{Timestamp: tQ3.Add(-48 * time.Hour), High: 2730, Low: 2700, Close: 2720, IsClosed: true},
+		{Timestamp: tQ3.Add(-24 * time.Hour), High: 2735, Low: 2705, Close: 2725, IsClosed: true},
+		{Timestamp: tQ3, High: 2755, Low: 2720, Close: 2730, IsClosed: true}, // Reaches/sweeps 2750
+	}
+	mtf := []indicators.Candle{
+		{Timestamp: tQ3.Add(-20 * time.Hour), High: 2720, Low: 2700, Close: 2710, IsClosed: true},
+		{Timestamp: tQ3.Add(-16 * time.Hour), High: 2730, Low: 2710, Close: 2720, IsClosed: true},
+		{Timestamp: tQ3.Add(-12 * time.Hour), High: 2748, Low: 2725, Close: 2740, IsClosed: true}, // MTF Swing high 2748
+		{Timestamp: tQ3.Add(-8 * time.Hour), High: 2735, Low: 2715, Close: 2725, IsClosed: true},
+		{Timestamp: tQ3.Add(-4 * time.Hour), High: 2740, Low: 2720, Close: 2730, IsClosed: true},
+		{Timestamp: tQ3, High: 2750, Low: 2725, Close: 2735, IsClosed: true}, // Sweeps 2748
+	}
+	ltf := []indicators.Candle{
+		{Timestamp: tQ3.Add(-60 * time.Minute), Open: 2732, High: 2735, Low: 2730, Close: 2734, IsClosed: true},
+		{Timestamp: tQ3.Add(-45 * time.Minute), Open: 2734, High: 2742, Low: 2733, Close: 2740, IsClosed: true}, // Bullish origin Open 2734
+		{Timestamp: tQ3.Add(-30 * time.Minute), Open: 2740, High: 2750, Low: 2738, Close: 2749, IsClosed: true}, // Peak high 2750
+		{Timestamp: tQ3.Add(-15 * time.Minute), Open: 2749, High: 2749, Low: 2730, Close: 2731, IsClosed: true}, // Bearish close < 2734! (CISD)
+		{Timestamp: tQ3, Open: 2731, High: 2732, Low: 2729, Close: 2730, IsClosed: true},
+	}
+
+	setup := eval.EvaluateSequence(htf, mtf, ltf, nil, "D", "4H", "15m", "XAUUSD", "")
+	if setup.State != StateReadyEntry1 {
+		t.Fatalf("expected StateReadyEntry1, got %s", setup.State)
+	}
+
+	// Cek proteksi SL Floor minimal $4.00 untuk Gold
+	slDist := math.Abs(setup.EntryPrice - setup.StopLoss)
+	if slDist < 4.00 {
+		t.Errorf("expected Gold SL distance >= 4.00, got %.2f (Entry: %.2f, SL: %.2f)",
+			slDist, setup.EntryPrice, setup.StopLoss)
+	}
+
+	// Cek batasan R:R 1:2.5 s.d. 1:4.5
+	if setup.RiskReward < 2.5 || setup.RiskReward > 4.5 {
+		t.Errorf("expected R:R within [2.5, 4.5], got %.2f", setup.RiskReward)
 	}
 }
