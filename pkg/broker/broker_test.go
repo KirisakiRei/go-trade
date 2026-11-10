@@ -45,3 +45,29 @@ func TestCTraderGetSymbolSpec(t *testing.T) {
 		t.Errorf("expected XAUUSD PointValue=100.0, VolumeStep=0.01, got %+v", xauSpec)
 	}
 }
+
+func TestExtractTicketIDs(t *testing.T) {
+	// 1. Direct Match-Trader ticket with '#'
+	cID, mID := ExtractTicketIDs("#W9945097837248137")
+	if mID != "W9945097837248137" {
+		t.Errorf("expected mtrID=W9945097837248137, got %s", mID)
+	}
+
+	// 2. Direct Match-Trader ticket without '#'
+	_, mID2 := ExtractTicketIDs("W9945097837248137")
+	if mID2 != "W9945097837248137" {
+		t.Errorf("expected mtrID=W9945097837248137, got %s", mID2)
+	}
+
+	// 3. Composite ticket
+	composite := "Match-Trader (Trader API REST)(#W525654572928872, 0.09 lot) & IC Markets cTrader (Native Go)(#693069935, 0.94 lot)"
+	cID3, mID3 := ExtractTicketIDs(composite)
+	if cID3 != 693069935 {
+		t.Errorf("expected cPosID=693069935, got %d", cID3)
+	}
+	if mID3 != "W525654572928872" {
+		t.Errorf("expected mtrID=W525654572928872, got %s", mID3)
+	}
+
+	_ = cID
+}

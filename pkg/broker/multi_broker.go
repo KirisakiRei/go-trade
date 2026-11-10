@@ -191,12 +191,15 @@ func ExtractTicketIDs(ticket string) (int64, string) {
 		}
 	}
 
-	if mtrID == "" && (strings.HasPrefix(ticket, "W") || strings.HasPrefix(ticket, "w")) {
-		mtrID = ticket
+	if mtrID == "" {
+		clean := strings.TrimSpace(strings.TrimPrefix(ticket, "#"))
+		if strings.HasPrefix(clean, "W") || strings.HasPrefix(clean, "w") {
+			mtrID = clean
+		}
 	}
 
 	if cPosID == 0 {
-		cPosID, _ = strconv.ParseInt(ticket, 10, 64)
+		cPosID, _ = strconv.ParseInt(strings.TrimPrefix(ticket, "#"), 10, 64)
 	}
 	return cPosID, mtrID
 }
