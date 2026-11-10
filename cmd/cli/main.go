@@ -305,7 +305,11 @@ func main() {
 		fmt.Printf("🔍 HTF SWEEP INSIDE FVG (%s):\n", setup.HTF)
 		fmt.Printf("  └ %s\n", setup.HTFSweep.Details)
 		fmt.Printf("  └ Level Stop Loss : %.5f (Puncak Sweep)\n", setup.HTFSweep.StopLoss)
-		fmt.Printf("  └ Target DOL      : %.5f (Eksternal Liquidity / SSL)\n\n", setup.HTFSweep.TargetDOL)
+		dolType := "SSL"
+		if setup.Bias == "BULLISH" {
+			dolType = "BSL"
+		}
+		fmt.Printf("  └ Target DOL      : %.5f (Eksternal Liquidity / %s)\n\n", setup.HTFSweep.TargetDOL, dolType)
 	} else if setup.HTFSweep != nil {
 		fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
 		if setup.HTFSweep.FVG != nil {
