@@ -242,6 +242,39 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+
+1. **Mode demo dihapus.** Flag `-demo`, `UjiEvaluator`, `DemoResult`, dan
+   `Publisher.AbaikanJamPasar` dihapus. Injeksi sinyal tiruan tidak lagi punya
+   jalur di binary engine, sesuai RUNBOOK "jangan memalsukan sinyal".
+2. **Yahoo Finance dihapus dari rantai feed.** Forex, logam, dan indeks hanya
+   dari TradingView FOREX.com; Binance hanya untuk instrumen kripto. Provider
+   tidak lagi jatuh ke instrumen lain (mis. emas ke PAXG) karena candle dari
+   instrumen lain menghasilkan setup yang tampak sah dengan harga yang salah.
+3. **Resolusi timeframe tak dikenal kini ditolak**, bukan diam-diam memakai 15
+   menit seperti sebelumnya.
+4. **Status ILA 3.0 diteruskan.** `WAIT_ILA3_*`, `ILA3_EXPANSION_*`, dan
+   `ILA3_TARGET_REACHED` dipetakan ke enum proto. Sebelumnya semuanya menjadi
+   `SIGNAL_STATUS_UNSPECIFIED` sehingga Runner membuangnya tanpa jejak.
+5. **TTL mengikuti LTF sebenarnya.** `5m/15m/1H/4H/D/W` kini dikenali, jadi
+   sinyal `W|1H` tidak lagi kedaluwarsa dalam 15 menit.
+
+#### Verifikasi
+
+- `go build ./...` dan `go vet ./...` lolos.
+- Test unit baru: `internal/engine/status_test.go`,
+  `internal/signal/signal_test.go`, `internal/grpcserver/status_test.go`,
+  `pkg/marketfeed/mapping_test.go`.
+- `TestBinanceProvider` pada `pkg/marketfeed/binance_test.go` adalah test
+  jaringan; gagal hanya bila lingkungan tidak dapat menjangkau Binance.
+
+---
+
 ### [2026-11-09] PERBAIKAN — Log pindah ke folder asli VPS, tahan container dihapus
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
@@ -898,8 +931,10 @@ Selain itu, status menunggu kini hanya dikirim ke pelanggan yang meminta
 - **Cara menjalankan:**
   ```bash
   go run ./cmd/engine -addr :9090 -strategy ila-2.0 -symbols XAUUSD
-  go run ./cmd/engine -addr :9090 -demo   # evaluator tiruan, untuk uji alur
   ```
+  Mode demo (`-demo`) sudah dihapus. Sinyal tiruan tidak boleh disuntikkan ke
+  engine produksi; uji alur sinyal dilakukan lewat Runner dengan data pasar
+  nyata.
 
 ### [2026-11-07] PERBAIKAN MARKET GATE — Tambah Proteksi Friday Market Close (Jumat >= 20:00 UTC / 03:00 WIB)
 - **Pelaku:** Hermes

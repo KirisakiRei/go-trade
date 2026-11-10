@@ -30,9 +30,6 @@ type Publisher struct {
 	// gagalPada mencatat kapan slot terakhir gagal, untuk membatasi log.
 	gagalPada map[string]time.Time
 
-	// abaikanJamPasar hanya untuk pengujian: memaksa engine mengevaluasi
-	// walau pasar tutup. Tidak pernah aktif di produksi.
-	abaikanJamPasar  bool
 	pakaiJadwalLilin bool
 	bufferLilin      time.Duration
 }
@@ -61,13 +58,6 @@ func NewPublisher(eval Evaluator, reg *Registry, version Version, log *slog.Logg
 	}
 }
 
-// AbaikanJamPasar mematikan pemeriksaan jam pasar. Hanya untuk pengujian
-// alur sinyal di luar jam pasar; tidak boleh dipakai di produksi.
-func (p *Publisher) AbaikanJamPasar() *Publisher {
-	p.abaikanJamPasar = true
-	return p
-}
-
 // DenganJadwalLilin menyalakan evaluasi berbasis penutupan lilin.
 func (p *Publisher) DenganJadwalLilin(buffer time.Duration) *Publisher {
 	p.pakaiJadwalLilin = true
@@ -92,7 +82,7 @@ func (p *Publisher) Scan(ctx context.Context) {
 		return
 	}
 
-	if !p.abaikanJamPasar && market.StateOf(now.Weekday(), now.Hour()) != market.Open {
+	if market.StateOf(now.Weekday(), now.Hour()) != market.Open {
 		// Pasar tutup: tidak ada evaluasi baru. Sinyal yang sudah terbit
 		// dibiarkan sampai TTL-nya habis.
 		p.expireAll(now)
@@ -340,7 +330,7 @@ func (p *Publisher) logGagal(symbol string, pair Pair, err error) {
 // broadcastStatus mengirim status menunggu dengan data struktur pendukung.
 func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time, res *Result) {
 	dir := "NEUTRAL"
-	var summary, nextAction string
+	var summary, nextAction, sequenceState string
 	var htfSweep *ila.HTFSweep
 	var cisd *ila.CISD
 
@@ -352,22 +342,24 @@ func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Stat
 		nextAction = res.NextAction
 		htfSweep = res.HTFSweep
 		cisd = res.CISD
+		sequenceState = res.SequenceState
 	}
 
 	p.reg.Broadcast(Signal{
-		ID:          statusID(symbol, pair),
-		Symbol:      symbol,
-		HTF:         pair.HTF,
-		LTF:         pair.LTF,
-		Status:      status,
-		Action:      signal.ActionPublish,
-		Direction:   dir,
-		Summary:     summary,
-		NextAction:  nextAction,
-		HTFSweep:    htfSweep,
-		CISD:        cisd,
-		PublishedAt: now,
-		ExpiresAt:   now.Add(signal.TTLUntuk(pair.LTF)),
+		ID:            statusID(symbol, pair),
+		Symbol:        symbol,
+		HTF:           pair.HTF,
+		LTF:           pair.LTF,
+		Status:        status,
+		Action:        signal.ActionPublish,
+		Direction:     dir,
+		Summary:       summary,
+		NextAction:    nextAction,
+		HTFSweep:      htfSweep,
+		CISD:          cisd,
+		SequenceState: sequenceState,
+		PublishedAt:   now,
+		ExpiresAt:     now.Add(signal.TTLUntuk(pair.LTF)),
 	})
 }
 
@@ -380,7 +372,7 @@ func (p *Publisher) slotDue(st *slotState, pair Pair, now time.Time) bool {
 	}
 
 	tf := pair.HTF
-	if st.lastStatus == signal.WaitLTFCISD {
+	if menungguLTF(st.lastStatus) {
 		tf = pair.LTF
 	}
 

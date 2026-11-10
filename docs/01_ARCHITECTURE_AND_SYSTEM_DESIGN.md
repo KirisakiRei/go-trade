@@ -28,7 +28,7 @@ ila-engine/
     ├── httpx/          # HTTP helper utilities
     ├── ila/            # Math Engine ILA 2.0 (FindFVGs, DetectHTFIlaSweep, DetectDynamicCISD)
     ├── indicators/     # Model data Candle, OHLC, dan kalkulator indikator teknikal
-    ├── marketfeed/     # Provider data real-time: TradingView WSS (FOREX.com), Binance, Yahoo
+    ├── marketfeed/     # Provider data real-time: TradingView WSS (FOREX.com), Binance (kripto)
     └── risk/           # Kalkulator 1.0% Live Equity Risk & Quality Gate R:R
 ```
 
@@ -45,10 +45,16 @@ Sistem menggunakan **MultiFeedProvider** dengan hierarki prioritas:
      * Euro: `FOREXCOM:EURUSD`
      * Nasdaq: `FOREXCOM:NAS100`
    * **Keunggulan:** Presisi bentuk candle, jam penutupan (*closing time*), dan wick identik 100% dengan chart di aplikasi TradingView HP pengguna.
-2. **Secondary Fallback: Binance WebSocket (`binance.go`)**
-   * Digunakan untuk instrumen crypto atau cadangan darurat.
-3. **Tertiary Fallback: Yahoo Finance REST (`yahoo.go`)**
-   * Digunakan hanya sebagai cadangan pasif.
+2. **Cadangan: Binance REST (`binance.go`)**
+   * Hanya untuk instrumen kripto. Forex, logam, dan indeks tidak punya
+     padanan di Binance, sehingga permintaan seperti itu dikembalikan sebagai
+     galat — bukan diisi candle instrumen lain.
+
+> Yahoo Finance sudah dihapus (2026-11-10). Alasannya: pemetaan timeframe-nya
+> tidak lengkap (M5 dan W jatuh ke 15 menit, H4 memakai candle harian) dan
+> pemetaan simbolnya bisa mengembalikan instrumen berbeda (mis. emas futures
+> untuk XAUUSD). Candle dari instrumen atau resolusi yang salah tetap terlihat
+> sah, sehingga lebih berbahaya daripada tidak ada data.
 
 ---
 

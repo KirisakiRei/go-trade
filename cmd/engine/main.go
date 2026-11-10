@@ -45,7 +45,6 @@ func main() {
 		caFile   = flag.String("tls-ca", env("ENGINE_MTLS_CA", ""), "CA klien untuk mTLS")
 		version  = flag.String("version", env("ENGINE_VERSION", "dev"), "versi engine untuk log & sinyal")
 		verbose  = flag.Bool("v", false, "log debug")
-		demo     = flag.Bool("demo", false, "evaluator tiruan untuk uji alur sinyal tanpa data pasar")
 		logDir   = flag.String("log-dir", env("ENGINE_LOG_DIR", "/opt/data/ila-engine/logs"), "folder log harian; kosong = hanya stdout")
 		logHari  = flag.Int("log-hari", envInt("ENGINE_LOG_HARI", 7), "hari penyimpanan log sebelum dihapus")
 		logBatas = flag.Int64("log-batas-mb", envInt64("ENGINE_LOG_BATAS_MB", 150), "batas total ukuran log dalam MB")
@@ -57,9 +56,12 @@ func main() {
 	flag.Parse()
 
 	// Pengirim disiapkan lebih dulu karena logger membutuhkan hook salinannya.
+	// Nama layanan menjadi nama berkas log, jadi engine kedua (ILA 3.0) wajib
+	// memakai nama berbeda agar tidak menulis ke berkas yang sama.
+	layanan := env("ENGINE_LOG_LAYANAN", "engine")
 	pengirim := logsync.Baru(logsync.Opsi{
 		Addr:     *logKirim,
-		Layanan:  "engine",
+		Layanan:  layanan,
 		CertFile: *logCert,
 		KeyFile:  *logKey,
 		CAFile:   *logCA,
@@ -67,7 +69,7 @@ func main() {
 
 	hasilLog := logkit.Buat(logkit.Opsi{
 		Dir:        *logDir,
-		Layanan:    "engine",
+		Layanan:    layanan,
 		Level:      pilihLevel(*verbose),
 		JugaStdout: true,
 		HariSimpan: *logHari,
@@ -83,32 +85,8 @@ func main() {
 	reg := engine.NewRegistry()
 
 	var evaluator engine.Evaluator
-	if *demo {
-		// Evaluator tiruan: menguji alur engine -> Runner tanpa data pasar.
-		pairs := engine.ILA2Pairs
-		hasil := map[string]*engine.Result{"H4|M15": engine.DemoResult()}
-		if *strategy == "ila-3.0" {
-			pairs = []engine.Pair{
-				{HTF: "4H", LTF: "5m"},
-				{HTF: "D", LTF: "15m"},
-				{HTF: "1H", LTF: "5m"},
-				{HTF: "W", LTF: "1H"},
-			}
-			hasil = map[string]*engine.Result{
-				"4H|5m": engine.DemoResult(),
-				"D|15m": engine.DemoResult(),
-				"1H|5m": engine.DemoResult(),
-				"W|1H":  engine.DemoResult(),
-			}
-		}
-		evaluator = engine.NewUjiEvaluator(*strategy, pairs, hasil)
-		logger.Warn("mode demo: sinyal berasal dari evaluator tiruan")
-	}
-
-	switch {
-	case evaluator != nil:
-		// mode demo sudah menentukan evaluator
-	case *strategy == "ila-3.0":
+	switch *strategy {
+	case "ila-3.0":
 		feed := marketfeed.NewMultiFeedProvider()
 		evaluator = engine.NewILA3Evaluator(feed)
 	default:
@@ -120,13 +98,10 @@ func main() {
 	}
 
 	ver := engine.Version{Engine: *version, Strategy: evaluator.StrategyVersion()}
-	pub := engine.NewPublisher(evaluator, reg, ver, logger)
-	if *demo {
-		// Mode demo sengaja melewati jam pasar agar alur bisa diuji kapan saja.
-		pub = pub.AbaikanJamPasar()
-	} else {
-		pub = pub.DenganJadwalLilin(3 * time.Second)
-	}
+	// Evaluasi hanya dijadwalkan pada penutupan lilin: setup yang sama tidak
+	// boleh diterbitkan ulang setiap siklus scan.
+	pub := engine.NewPublisher(evaluator, reg, ver, logger).
+		DenganJadwalLilin(3 * time.Second)
 
 	// Simbol dari konfigurasi dijadikan pelanggan tetap agar engine bisa
 	// dipakai tanpa Runner selama pengujian.

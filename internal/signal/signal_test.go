@@ -31,6 +31,44 @@ func TestTTLPerTimeframe(t *testing.T) {
 	}
 }
 
+// TestTTLMenormalkanPenulisanTimeframe memastikan TTL mengikuti satu candle
+// LTF untuk kedua gaya penulisan. Sebelumnya ILA 3.0 memakai 5m/15m/1H
+// sehingga semuanya jatuh ke nilai cadangan 15 menit.
+func TestTTLMenormalkanPenulisanTimeframe(t *testing.T) {
+	cases := map[string]time.Duration{
+		"5m":  5 * time.Minute,
+		"5M":  5 * time.Minute,
+		"15m": 15 * time.Minute,
+		"M30": 30 * time.Minute,
+		"1H":  time.Hour,
+		"4H":  4 * time.Hour,
+		"D":   24 * time.Hour,
+		"D1":  24 * time.Hour,
+		"W":   7 * 24 * time.Hour,
+		"W1":  7 * 24 * time.Hour,
+	}
+
+	for ltf, want := range cases {
+		if got := TTLUntuk(ltf); got != want {
+			t.Errorf("TTLUntuk(%q) = %s, ingin %s", ltf, got, want)
+		}
+	}
+}
+
+// TestTTLPresetILA3 memeriksa LTF yang benar-benar dipakai preset ILA 3.0.
+func TestTTLPresetILA3(t *testing.T) {
+	cases := map[string]time.Duration{
+		"5m":  5 * time.Minute,
+		"15m": 15 * time.Minute,
+		"1H":  time.Hour,
+	}
+	for ltf, want := range cases {
+		if got := TTLUntuk(ltf); got != want {
+			t.Errorf("preset ILA 3.0 dengan LTF %q mendapat %s, ingin %s", ltf, got, want)
+		}
+	}
+}
+
 func TestPublishTanpaSinyalSebelumnya(t *testing.T) {
 	var s Slot
 	now := time.Now()

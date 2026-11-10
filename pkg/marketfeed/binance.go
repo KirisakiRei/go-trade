@@ -29,24 +29,28 @@ func (p *BinanceProvider) Name() string {
 }
 
 func (p *BinanceProvider) mapTimeframe(tf string) string {
-	tfUpper := strings.ToUpper(tf)
+	tfUpper := strings.ToUpper(strings.TrimSpace(tf))
 	switch tfUpper {
-	case "M1":
+	case "M1", "1M":
 		return "1m"
-	case "M5":
+	case "M3", "3M":
+		return "3m"
+	case "M5", "5M", "5m":
 		return "5m"
-	case "M15":
+	case "M15", "15M", "15m":
 		return "15m"
-	case "M30":
+	case "M30", "30M", "30m":
 		return "30m"
-	case "H1":
+	case "H1", "1H", "60M", "1h":
 		return "1h"
-	case "H4":
+	case "H4", "4H", "240M", "4h":
 		return "4h"
-	case "D1":
+	case "D", "D1", "1D", "1d":
 		return "1d"
+	case "W", "W1", "1W", "1w":
+		return "1w"
 	default:
-		return strings.ToLower(tf)
+		return ""
 	}
 }
 
@@ -74,6 +78,9 @@ func (p *BinanceProvider) FetchCandles(ctx context.Context, symbol string, timef
 
 	binanceSymbol := p.mapSymbol(symbol)
 	interval := p.mapTimeframe(timeframe)
+	if interval == "" {
+		return nil, fmt.Errorf("timeframe Binance tidak dikenal: %q", timeframe)
+	}
 
 	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d", binanceSymbol, interval, limit)
 

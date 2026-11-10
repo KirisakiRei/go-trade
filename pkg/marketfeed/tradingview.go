@@ -71,6 +71,8 @@ func (p *TradingViewProvider) MapSymbol(symbol string) string {
 		return "FOREXCOM:NZDUSD"
 	case "NAS100", "US100", "USTEC", "NDX":
 		return "FOREXCOM:NAS100"
+	case "US500", "SPX500", "SPX":
+		return "FOREXCOM:SPX500"
 	case "BTCUSD", "BTCUSDT":
 		return "BINANCE:BTCUSDT"
 	case "ETHUSD", "ETHUSDT":
@@ -105,7 +107,9 @@ func (p *TradingViewProvider) MapResolution(timeframe string) string {
 	case "1W", "W1", "W":
 		return "1W"
 	default:
-		return "15"
+		// Timeframe tak dikenal tidak boleh diam-diam memakai 15 menit:
+		// candle dengan resolusi berbeda membuat evaluasi salah tanpa jejak.
+		return ""
 	}
 }
 
@@ -154,6 +158,9 @@ func formatTVMsg(funcName string, params []any) string {
 func (p *TradingViewProvider) FetchCandles(ctx context.Context, symbol string, timeframe string, limit int) ([]indicators.Candle, error) {
 	tvSymbol := p.MapSymbol(symbol)
 	resolution := p.MapResolution(timeframe)
+	if resolution == "" {
+		return nil, fmt.Errorf("timeframe TradingView tidak dikenal: %q", timeframe)
+	}
 
 	if limit <= 0 {
 		limit = 100

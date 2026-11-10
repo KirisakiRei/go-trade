@@ -65,3 +65,49 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Engine ILA 3.0: kontrak gRPC sama, port berbeda. Dijalankan sebagai proses
+  # terpisah agar strategi 2.0 tidak perlu berhenti saat 3.0 di-redeploy, dan
+  # sebaliknya. Port 9444 dipilih agar tidak tertukar dengan 9443 (ILA 2.0)
+  # maupun 9090 (penerima log platform).
+  engine3:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      ENGINE_STRATEGY: ila-3.0
+      ENGINE_VERSION: "3.0.0"
+      ENGINE_GRPC_ADDR: ":9444"
+
+      ENGINE_MTLS_CERT: /certs/engine-server.crt
+      ENGINE_MTLS_KEY: /certs/engine-server.key
+      ENGINE_MTLS_CA: /certs/ca.crt
+
+      ENGINE_LOG_DIR: /var/log/ila
+      ENGINE_LOG_HARI: "14"
+      ENGINE_LOG_BATAS_MB: "256"
+
+      ENGINE_LOG_GRPC_ADDR: ${LOG_SERVER_ADDR:-172.26.12.195:9090}
+      ENGINE_LOG_MTLS_CERT: /certs/engine-client.crt
+      ENGINE_LOG_MTLS_KEY: /certs/engine-client.key
+      ENGINE_LOG_MTLS_CA: /certs/ca.crt
+      # Nama layanan menjadi nama berkas log. Wajib berbeda dari "engine" agar
+      # dua proses tidak menulis ke berkas yang sama (lokal maupun di platform).
+      ENGINE_LOG_LAYANAN: engine3
+    ports:
+      - "${LOCAL_IP:-172.26.1.188}:9444:9444"
+    volumes:
+      - ./certs:/certs:ro
+      - ${LOG_DIR_HOST3:-/var/log/ila-engine3}:/var/log/ila
+    mem_limit: 200m
+    cpus: "0.8"
+    pids_limit: 200
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9444' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

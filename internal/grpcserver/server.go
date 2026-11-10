@@ -293,6 +293,22 @@ func statusOf(s signal.Status) enginev1.SignalStatus {
 		return enginev1.SignalStatus_WAIT_LTF_CISD
 	case signal.Invalidated:
 		return enginev1.SignalStatus_INVALIDATED
+	case signal.WaitILA3HTFKeyLevel:
+		return enginev1.SignalStatus_WAIT_ILA3_HTF_KEY_LEVEL
+	case signal.WaitILA3MTFReversal:
+		return enginev1.SignalStatus_WAIT_ILA3_MTF_REVERSAL
+	case signal.WaitILA3LTFCISD1:
+		return enginev1.SignalStatus_WAIT_ILA3_LTF_CISD_1
+	case signal.ILA3Expansion1Active:
+		return enginev1.SignalStatus_ILA3_EXPANSION_1_ACTIVE
+	case signal.WaitILA3MTFFVGRetr:
+		return enginev1.SignalStatus_WAIT_ILA3_MTF_FVG_RETR
+	case signal.WaitILA3LTFCISD2:
+		return enginev1.SignalStatus_WAIT_ILA3_LTF_CISD_2
+	case signal.ILA3Expansion2Active:
+		return enginev1.SignalStatus_ILA3_EXPANSION_2_ACTIVE
+	case signal.ILA3TargetReached:
+		return enginev1.SignalStatus_ILA3_TARGET_REACHED
 	default:
 		return enginev1.SignalStatus_SIGNAL_STATUS_UNSPECIFIED
 	}

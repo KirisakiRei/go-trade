@@ -40,8 +40,39 @@ func mapILA3Status(s string) signal.Status {
 		return signal.Ready
 	case "INVALIDATED":
 		return signal.Invalidated
+	// State menunggu dan perluasan diteruskan sebagai status tampilan.
+	// Sebelumnya semuanya dibuang (""), sehingga Radar tidak pernah
+	// menunjukkan kemajuan ILA 3.0 sama sekali.
+	case "WAIT_HTF_KEY_LEVEL":
+		return signal.WaitILA3HTFKeyLevel
+	case "WAIT_MTF_REVERSAL":
+		return signal.WaitILA3MTFReversal
+	case "WAIT_LTF_CISD_1":
+		return signal.WaitILA3LTFCISD1
+	case "EXPANSION_1_ACTIVE":
+		return signal.ILA3Expansion1Active
+	case "WAIT_MTF_FVG_RETRACE":
+		return signal.WaitILA3MTFFVGRetr
+	case "WAIT_LTF_CISD_2":
+		return signal.WaitILA3LTFCISD2
+	case "EXPANSION_2_ACTIVE":
+		return signal.ILA3Expansion2Active
+	case "TARGET_REACHED":
+		return signal.ILA3TargetReached
 	default:
-		// State menunggu: tidak diterbitkan sebagai sinyal utuh.
+		// EXPIRED dan state tak dikenal tidak diterbitkan sebagai sinyal.
 		return ""
+	}
+}
+
+// menungguLTF menandai status yang hanya bisa berubah setelah candle LTF
+// ditutup. Dipakai penjadwal evaluasi agar tidak memindai lebih sering dari
+// yang diperlukan.
+func menungguLTF(s signal.Status) bool {
+	switch s {
+	case signal.WaitLTFCISD, signal.WaitILA3LTFCISD1, signal.WaitILA3LTFCISD2:
+		return true
+	default:
+		return false
 	}
 }
