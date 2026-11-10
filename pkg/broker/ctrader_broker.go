@@ -106,12 +106,18 @@ func (b *CTraderBroker) ensureConnected(ctx context.Context) error {
 		return nil
 	}
 
+	if b.client != nil {
+		_ = b.client.Stop()
+		b.client = nil
+		b.authed = false
+	}
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	client := &ctrader.Client{
 		ApplicationClientID: b.cfg.ClientID,
 		ApplicationSecret:   b.cfg.ClientSecret,
 		Logger:              logger,
-		Deadline:            10 * time.Second,
+		Deadline:            15 * time.Second,
 		Live:                b.cfg.Live,
 		HandlerEvent:        func(proto.Message) {},
 	}
@@ -120,9 +126,21 @@ func (b *CTraderBroker) ensureConnected(ctx context.Context) error {
 		return fmt.Errorf("failed to start cTrader client: %w", err)
 	}
 
+	// Gunakan auth context minimal 15 detik jika ctx pemanggil sudah tipis/expired
+	authCtx := ctx
+	if authCtx.Err() != nil {
+		var cancel context.CancelFunc
+		authCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	} else if dl, ok := authCtx.Deadline(); ok && time.Until(dl) < 10*time.Second {
+		var cancel context.CancelFunc
+		authCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
+
 	// Authenticate Account
 	_, err := ctrader.Command[*openapi.ProtoOAAccountAuthReq, *openapi.ProtoOAAccountAuthRes](
-		ctx,
+		authCtx,
 		client,
 		&openapi.ProtoOAAccountAuthReq{
 			CtidTraderAccountId: &b.cfg.AccountID,
@@ -136,6 +154,19 @@ func (b *CTraderBroker) ensureConnected(ctx context.Context) error {
 
 	b.client = client
 	b.authed = true
+	return nil
+}
+
+func (b *CTraderBroker) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.client != nil {
+		err := b.client.Stop()
+		b.client = nil
+		b.authed = false
+		return err
+	}
 	return nil
 }
 

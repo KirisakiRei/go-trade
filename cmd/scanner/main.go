@@ -488,8 +488,6 @@ func main() {
 		LTF      string
 		PairName string
 	}{
-		{HTF: "W", LTF: "H4", PairName: "W -> H4"},
-		{HTF: "D1", LTF: "H1", PairName: "D1 -> H1"},
 		{HTF: "H4", LTF: "M15", PairName: "H4 -> M15"},
 		{HTF: "H1", LTF: "M5", PairName: "H1 -> M5"},
 	}
@@ -534,8 +532,8 @@ func main() {
 				dirEmoji = "🔴 SELL"
 			}
 
-			// Scenario A: Auto-Execution / Entry Ready Alert
-			if (ep.HTF == "H4" || ep.HTF == "D1") && setup.Status == "READY_TO_ENTRY" && setup.PassedMinRR && setup.HTFSweep != nil && !setup.HTFSweep.SweepInProgress && setup.CISD != nil && setup.CISD.Detected {
+			// Scenario A: Auto-Execution / Entry Ready Alert (H4 ➡️ M15 & H1 ➡️ M5)
+			if (ep.HTF == "H4" || ep.HTF == "H1") && setup.Status == "READY_TO_ENTRY" && setup.PassedMinRR && setup.HTFSweep != nil && !setup.HTFSweep.SweepInProgress && setup.CISD != nil && setup.CISD.Detected {
 				breakTimeStr := setup.CISD.BreakTime.Format(time.RFC3339)
 				if prevILA.LastBreakTime != breakTimeStr || prevILA.LastStatus != "ENTRY" {
 					entryPrice := setup.EntryPrice

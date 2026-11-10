@@ -19,7 +19,7 @@ import (
 func main() {
 	symbol := flag.String("symbol", "EURUSD", "Primary market symbol to analyze")
 	corrSym := flag.String("corr", "", "Correlated symbol for SSMT (default: auto-detected)")
-	mode := flag.String("mode", "new-day", "Preset mode: new-week (D->4H->15m) or new-day (4H->1H->5m)")
+	mode := flag.String("mode", "new-week", "Preset mode: new-week (D->4H->15m) or new-day (4H->1H->5m)")
 	htfFlag := flag.String("htf", "", "Custom HTF (e.g. D, 4H)")
 	mtfFlag := flag.String("mtf", "", "Custom MTF (e.g. 4H, 1H)")
 	ltfFlag := flag.String("ltf", "", "Custom LTF (e.g. 15m, 5m)")
@@ -32,14 +32,14 @@ func main() {
 		corrClean = ssmt.DefaultCorrelationPairs[symClean]
 	}
 
-	htf := "4H"
-	mtf := "1H"
-	ltf := "5m"
+	htf := "D"
+	mtf := "4H"
+	ltf := "15m"
 
-	if *mode == "new-week" {
-		htf = "D"
-		mtf = "4H"
-		ltf = "15m"
+	if *mode == "new-day" {
+		htf = "4H"
+		mtf = "1H"
+		ltf = "5m"
 	} else if *mode == "monthly" {
 		htf = "1M"
 		mtf = "D"

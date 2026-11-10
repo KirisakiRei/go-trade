@@ -279,16 +279,18 @@ func main() {
 
 	// 2. Initialize cTrader Broker client exclusively for ILA 3.0
 	cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
+	if cTraderBroker != nil {
+		defer cTraderBroker.Close()
+	}
 
 	// 3. Check Closed Positions on cTrader
 	var openPositions []model.Position
 	db.Where("status = ?", "OPEN").Find(&openPositions)
 
 	if len(openPositions) > 0 && cTraderBroker != nil {
-		activePositions, err := cTraderBroker.GetOpenPositions(ctx)
+		checkCtx, checkCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer checkCancel()
+		activePositions, err := cTraderBroker.GetOpenPositions(checkCtx)
 		if err == nil {
 			activeMap := make(map[string]bool)
 			for _, ap := range activePositions {
@@ -301,7 +303,7 @@ func main() {
 					exitPrice := pos.OpenPrice
 					actualPnL := 0.0
 					if cPosID > 0 {
-						deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
+						deals, _ := cTraderBroker.GetDealsByPosition(checkCtx, cPosID)
 						for _, d := range deals {
 							if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
 								exitPrice = d.ExecutionPrice
@@ -397,8 +399,7 @@ func main() {
 		MTF      string
 		LTF      string
 	}{
-		{ModeName: "New Day", HTF: "4H", MTF: "1H", LTF: "5m"},
-		{ModeName: "New Week", HTF: "D", MTF: "4H", LTF: "15m"},
+		{ModeName: "Daily Macro", HTF: "D", MTF: "4H", LTF: "15m"},
 	}
 
 	for _, sym := range Pairs {
@@ -410,9 +411,9 @@ func main() {
 			prevState := state.Pairs[key]
 
 			// Scheduler Berbasis Penutupan Lilin Adaptif ILA 3.0:
-			// Fase 3 (Menunggu CISD di LTF): Jadwal mengikuti lilin LTF (5m / 15m)
-			// Fase 2 (Menunggu Reversal di MTF): Jadwal mengikuti lilin MTF (1H / 4H)
-			// Fase 1 (Menunggu Key Level HTF): Jadwal mengikuti lilin HTF (4H / D)
+			// Fase 3 (Menunggu CISD di LTF): Jadwal mengikuti lilin LTF (15m)
+			// Fase 2 (Menunggu Reversal di MTF): Jadwal mengikuti lilin MTF (4H)
+			// Fase 1 (Menunggu Key Level HTF): Jadwal mengikuti lilin HTF (D)
 			var checkTF string
 			switch prevState.LastState {
 			case "WAIT_LTF_CISD_1", "WAIT_LTF_CISD_2", "READY_ENTRY_1", "READY_ENTRY_2":
@@ -427,13 +428,15 @@ func main() {
 				continue
 			}
 
-			hCandles, _ := feed.FetchCandles(ctx, sym, ps.HTF, 40)
-			mCandles, _ := feed.FetchCandles(ctx, sym, ps.MTF, 40)
-			lCandles, _ := feed.FetchCandles(ctx, sym, ps.LTF, 80) // 80 candles covers full session for anchored CISD
+			feedCtx, feedCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			hCandles, _ := feed.FetchCandles(feedCtx, sym, ps.HTF, 40)
+			mCandles, _ := feed.FetchCandles(feedCtx, sym, ps.MTF, 40)
+			lCandles, _ := feed.FetchCandles(feedCtx, sym, ps.LTF, 80) // 80 candles covers full session for anchored CISD
 			var corrCandles []indicators.Candle
 			if corrSym != "" {
-				corrCandles, _ = feed.FetchCandles(ctx, corrSym, ps.MTF, 40)
+				corrCandles, _ = feed.FetchCandles(feedCtx, corrSym, ps.MTF, 40)
 			}
+			feedCancel()
 
 			setup := eval.EvaluateSequence(hCandles, mCandles, lCandles, corrCandles, ps.HTF, ps.MTF, ps.LTF, sym, corrSym)
 			if setup == nil {
@@ -455,7 +458,10 @@ func main() {
 				db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN'", sym).Count(&countOpen)
 
 				if countOpen == 0 && cTraderBroker != nil && prevState.LastState != "ENTRY" {
-					dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(ctx, time.Now())
+					dailyCtx, dailyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(dailyCtx, time.Now())
+					dailyCancel()
+
 					if dailyStatus != nil && !dailyStatus.CanTrade {
 						lockKey := sym + "-LOCK"
 						if prevState.LastState != lockKey {
@@ -499,7 +505,8 @@ func main() {
 						continue
 					}
 
-					acc, accErr := cTraderBroker.GetAccountInfo(ctx)
+					brokerCtx, brokerCancel := context.WithTimeout(context.Background(), 25*time.Second)
+					acc, accErr := cTraderBroker.GetAccountInfo(brokerCtx)
 					var equity float64
 					if acc != nil {
 						equity = acc.Equity
@@ -508,6 +515,7 @@ func main() {
 						}
 					}
 					if accErr != nil || equity <= 0 {
+						brokerCancel()
 						messages = append(messages, fmt.Sprintf("⚠️ **[ILA 3.0] Eksekusi Dibatalkan — %s %s**\nGagal membaca ekuitas akun cTrader. Entry ditolak demi keamanan margin.\n*Error:* `%v`", sEmoji, sName, accErr))
 						continue
 					}
@@ -515,7 +523,7 @@ func main() {
 					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
 
 					setupID := fmt.Sprintf("ILA3-%s-%s-%s", sym, ps.ModeName, time.Now().Format("200601021504"))
-					orderRes, err := cTraderBroker.ExecuteOrder(ctx, broker.OrderRequest{
+					orderRes, err := cTraderBroker.ExecuteOrder(brokerCtx, broker.OrderRequest{
 						Symbol:     sym,
 						Direction:  dir,
 						OpenPrice:  setup.EntryPrice,
@@ -525,6 +533,7 @@ func main() {
 						Comment:    fmt.Sprintf("ILA 3.0 %s %s", ps.ModeName, setupID),
 						SetupID:    setupID,
 					})
+					brokerCancel()
 
 					if err == nil {
 						nowDt := time.Now()

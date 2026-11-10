@@ -242,6 +242,25 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] PERBAIKAN — Timeframe Slot ILA 2.0 (H4-M15 & H1-M5), ILA 3.0 Daily Macro (D-4H-15m), & Fix cTrader Context Deadline
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN / KONFIGURASI
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Fokus Timeframe ILA 2.0 (`cmd/scanner/main.go`):**
+    - Membatasi pencarian dan auto-eksekusi ILA 2.0 murni hanya pada dua pasangan timeframe: `H4 ➡️ M15` dan `H1 ➡️ M5` (menghapus pemantauan W ➡️ H4 dan D1 ➡️ H1).
+    - Membuka gerbang eksekusi untuk kedua timeframe tersebut (`ep.HTF == "H4" || ep.HTF == "H1"`).
+  - **Fokus Macro ILA 3.0 (`cmd/ila3-scanner/main.go` & `cmd/ila3-cli/main.go`):**
+    - Memusatkan ILA 3.0 murni berakar dari timeframe Daily Macro: `D (HTF) ➡️ 4H (MTF) ➡️ 15m (LTF)` (menghapus mode intraday 4H-1H-5m).
+  - **Perbaikan Fatal Error cTrader `context deadline exceeded`:**
+    - **Penyebab:** Scanner ILA 3.0 sebelumnya memakai satu `context` tunggal 25 detik di awal `main()`. Karena iterasi candle multi-pair menghabiskan waktu HTTP request, ketika masuk ke panggilan cTrader (`GetAccountInfo`), context sudah expired sehingga otentikasi Protobuf TLS gagal dengan deadline exceeded.
+    - **Perbaikan di `cmd/ila3-scanner/main.go`:** Setiap tahapan (cek posisi terbuka, fetch candle, cek kuota harian, eksekusi broker) kini memiliki context timeout mandiri dan segar.
+    - **Perbaikan di `pkg/broker/ctrader_broker.go`:** Menambahkan pengaman `authCtx` di `ensureConnected`: jika context pemanggil sudah expired atau tersisa < 10 detik, sistem otomatis membuat context auth baru berdurasi 15 detik. Menambahkan method `Close()` untuk pembersihan koneksi socket cTrader yang rapi.
+  - **Verifikasi & Build:**
+    - Semua test paket PASS 100%. Kompilasi ulang seluruh binary dan restart daemon 8080 & 8082.
+
+---
+
 ### [2026-11-10] RISK MANAGEMENT — Penyesuaian Risiko Menjadi 1.0% Live Equity untuk ILA 2.0 & ILA 3.0
 - **Pelaku:** Hermes
 - **Tipe:** RISK MANAGEMENT / KONFIGURASI
