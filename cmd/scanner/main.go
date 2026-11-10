@@ -36,41 +36,27 @@ const (
 
 var Pairs = []string{"XAUUSD", "EURUSD", "USTEC"}
 
-// DBPath dan StateFilePath mengikuti ILA_DATA_DIR agar aman di Docker.
 func DBPath() string        { return datadir.Berkas("ila.db") }
 func StateFilePath() string { return datadir.Berkas("monitor_state.json") }
 
-type PairState struct {
-	LastM15AsOf   string `json:"last_m15_as_of"`
-	LastH4Phase   string `json:"last_h4_ph"`
-	LastH1Phase   string `json:"last_h1_ph"`
-	LastM15Phase  string `json:"last_m15_ph"`
-	LastGrade     string `json:"last_grade"`
-	LastAlertType string `json:"last_alert_type"`
-}
-
 type ILAPairState struct {
-	LastBreakTime string `json:"last_break_time"`
-	LastStatus    string `json:"last_status"`
-	LastHTFStatus string `json:"last_htf_status"`
+	LastBreakTime   string    `json:"last_break_time"`
+	LastStatus      string    `json:"last_status"`
+	LastHTFStatus   string    `json:"last_htf_status"`
+	LastEvaluatedAt time.Time `json:"last_evaluated_at"`
 }
 
 type MonitorState struct {
 	LastSession string                  `json:"last_session"`
-	Pairs       map[string]PairState    `json:"pairs"`
 	ILAPairs    map[string]ILAPairState `json:"ila_pairs"`
 }
 
 func loadState() MonitorState {
 	var s MonitorState
-	s.Pairs = make(map[string]PairState)
 	s.ILAPairs = make(map[string]ILAPairState)
 	data, err := os.ReadFile(StateFilePath())
 	if err == nil {
 		_ = json.Unmarshal(data, &s)
-	}
-	if s.Pairs == nil {
-		s.Pairs = make(map[string]PairState)
 	}
 	if s.ILAPairs == nil {
 		s.ILAPairs = make(map[string]ILAPairState)
@@ -80,6 +66,67 @@ func loadState() MonitorState {
 
 func saveState(s MonitorState) {
 	if err := datadir.TulisJSON(StateFilePath(), s); err == nil {
+	}
+}
+
+var nyLocation *time.Location
+
+func init() {
+	var err error
+	nyLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLocation = time.FixedZone("EST", -5*3600)
+	}
+}
+
+func formatNYTime(t time.Time) string {
+	if nyLocation != nil {
+		return t.In(nyLocation).Format("15:04 NY")
+	}
+	return t.UTC().Add(-5 * time.Hour).Format("15:04 NY")
+}
+
+func padRight(s string, width int) string {
+	runes := []rune(s)
+	if len(runes) >= width {
+		return string(runes[:width])
+	}
+	return s + strings.Repeat(" ", width-len(runes))
+}
+
+func slotDue(lastEval time.Time, tf string, now time.Time, buffer time.Duration) bool {
+	if lastEval.IsZero() {
+		return true
+	}
+	tClose := latestCandleClose(tf, now.Add(-buffer))
+	if tClose.IsZero() {
+		return true
+	}
+	tReady := tClose.Add(buffer)
+	if now.Before(tReady) {
+		return false
+	}
+	return lastEval.Before(tReady)
+}
+
+func latestCandleClose(tf string, t time.Time) time.Time {
+	t = t.UTC()
+	switch strings.ToUpper(tf) {
+	case "M5", "5M", "5":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/5)*5, 0, 0, time.UTC)
+	case "M15", "15M", "15":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/15)*15, 0, 0, time.UTC)
+	case "H1", "1H", "60", "60M":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
+	case "H4", "4H", "240", "240M":
+		return time.Date(t.Year(), t.Month(), t.Day(), (t.Hour()/4)*4, 0, 0, 0, time.UTC)
+	case "D", "D1", "1D":
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	case "W", "W1", "1W":
+		days := (int(t.Weekday()) + 6) % 7
+		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Time{}
 	}
 }
 
@@ -147,145 +194,70 @@ func formatPrice(symbol string, val float64) string {
 	return fmt.Sprintf("%.5f", val)
 }
 
-func statusLabel(st string) string {
-	mapping := map[string]string{
-		"SETUP_VALID": "Setup Terkonfirmasi",
-		"CANDIDATE":   "Kandidat Setup (Terbentuk)",
-		"WAIT":        "Menunggu Konfirmasi",
-		"INVALIDATED": "Setup Dibatalkan",
+func getILA2ActionPlan(status, htf, ltf, bias string) string {
+	switch status {
+	case "WAIT_HTF_SWEEP":
+		return fmt.Sprintf("Liquidity Hunting: Dealing range %s aktif. Mengawasi aksi manipulasi harga berupa wick sweep (liquidity grab) pada ekor candle acuan di dalam FVG %s untuk memvalidasi pergeseran order flow institusional.", htf, htf)
+	case "WAIT_HTF_CANDLE_CLOSE":
+		return fmt.Sprintf("Displacement Verification: Candle sweep %s sedang aktif menyerap likuiditas di dalam FVG. Wajib menunggu penutupan lilin (closed candle) resmi untuk memvalidasi rejection wick dan memastikan displacement bertahan tanpa menembus batas FVG.", htf)
+	case "WAIT_LTF_CISD":
+		return fmt.Sprintf("Trigger Gate (Candle 5): Memasuki jendela eksekusi %s. Mengawasi Change In State of Delivery (CISD) via candle %s closed body menembus origin opposing leg sebelum titik ekstrim untuk konfirmasi entri yang presisi.", ltf, ltf)
+	case "READY_TO_ENTRY":
+		return fmt.Sprintf("Market Execution: Konfirmasi ganda terverifikasi (HTF Liquidity Sweep + LTF CISD Valid by body). Buka posisi %s di open candle %s berikutnya dengan proteksi Structural SL di titik ekstrim dan target DOL.", bias, ltf)
+	case "DAILY_TRADE_LOCK":
+		return "Risk Management Gate: Setup terkonfirmasi valid namun auto-eksekusi ditahan demi mematuhi kuota harian prop firm (1 Win = Stop / Max 2 Trades). Keputusan entri manual tetap di tangan Anda jika disetujui."
+	case "OPEN_POS_HOLD":
+		return "Anti-Overlapping Gate: Setup terkonfirmasi valid namun auto-eksekusi ditahan karena masih ada posisi terbuka yang sedang berjalan di pasar. Menjaga batas risiko eksposur akun."
+	case "INVALIDATED":
+		return fmt.Sprintf("Structure Invalidation: Setup sweep di %s batal/hangus karena ekor sweep ditembus atau jendela Candle 5 ditutup tanpa CISD. Reset pemantauan ke dealing range FVG berikutnya.", htf)
+	default:
+		return fmt.Sprintf("Memantau pembentukan formasi FVG dan reaksi likuiditas berikutnya pada timeframe %s.", htf)
 	}
-	if v, ok := mapping[st]; ok {
-		return v
-	}
-	return strings.ReplaceAll(st, "_", " ")
 }
 
-func biasLabel(b string) string {
-	mapping := map[string]string{
-		"BULLISH":  "Bullish (Naik) 🟢",
-		"BEARISH":  "Bearish (Turun) 🔴",
-		"NEUTRAL":  "Netral ⚖️",
-		"CONFLICT": "Konflik Arah ⚠️",
-		"WAIT":     "Wait & See ⏳",
-	}
-	if v, ok := mapping[b]; ok {
-		return v
-	}
-	return b
-}
-
-func patternLabel(p string) string {
-	res := strings.ReplaceAll(p, "MOMENTUM", "Momentum")
-	res = strings.ReplaceAll(res, "REENTRY", "Re-entry")
-	res = strings.ReplaceAll(res, "CSAK", "CSAK")
-	res = strings.ReplaceAll(res, "EXTREME", "Extreme")
-	res = strings.ReplaceAll(res, "MHV", "MHV")
-	res = strings.ReplaceAll(res, "SIDEWAYS", "Sideways")
-	res = strings.ReplaceAll(res, "NONE", "Netral")
-	return strings.ReplaceAll(res, "->", "➡️")
-}
-
-func cleanSessionName(sess string) string {
-	s := strings.ReplaceAll(sess, "LONDON_NEWYORK_OVERLAP", "Sesi Overlap London - New York")
-	s = strings.ReplaceAll(s, "LONDON_SESSION", "Sesi London")
-	s = strings.ReplaceAll(s, "NEWYORK_SESSION", "Sesi New York")
-	s = strings.ReplaceAll(s, "ASIAN_SESSION", "Sesi Asia")
-	s = strings.ReplaceAll(s, "ROLLOVER_BLACKOUT", "Jeda Rollover")
-	s = strings.ReplaceAll(s, "WEEKEND_CLOSED", "Libur Akhir Pekan")
-	return s
-}
-
-func determineNextAction(grade, bias, m15Ph, m15St string, rr float64) string {
-	if rr > 0 && rr < MinRR {
-		return fmt.Sprintf("⏳ Tahan Dulu: Rasio R:R (1:%.2f) belum mencapai syarat minimal 1:2. Menunggu harga koreksi lebih dalam mendekati level SL.", rr)
-	}
-	if grade == "CONFLICT" {
-		return "🛑 Wait & See: Arah timeframe besar (H4/H1) dan trigger (M15) masih berlawanan."
-	}
-	if grade == "INVALID_CSM_AT_TF2" {
-		return "🛑 Re-entry Batal: Terbentuk Candle Momentum (CSM) di H1 yang membatalkan setup Re-entry."
-	}
-	if grade == "INVALID_CSM_AT_TRIGGER" {
-		return "🛑 Trigger Batal: Candle M15 menembus BB sebagai CSM berlawanan arah."
-	}
-	if grade == "GRADE_B_STRONG" {
-		return "👀 Mengintai Zona Entry: Tren selaras, menunggu konfirmasi trigger M15 di zona MA."
-	}
-	if m15Ph == "REENTRY_CONFIRMED" && m15St == "WAIT" {
-		return "⏳ Menunggu Pullback: Menunggu candle M15 koreksi masuk ke celah garis MA 5/10."
-	}
-	if m15Ph == "CS_KUKUH" {
-		return "⏳ Menunggu Re-entry: CSAK baru terbentuk, menunggu candle retracement ke MA 5/10."
-	}
-	if m15Ph == "EXTREME_CONFIRMED" {
-		return "⏳ Menunggu Siklus: Extreme baru terbentuk, pantau TP Wajib dan MHV berikutnya."
-	}
-	if m15St == "SETUP_VALID" && rr >= MinRR {
-		return "🎯 Siap Eksekusi: Setup valid dan R:R memenuhi syarat minimal 1:2."
-	}
-	return "⏳ Menunggu Pembentukan Setup Valid pada Closed Candle M15."
-}
-
-func padRight(s string, width int) string {
-	runes := []rune(s)
-	if len(runes) >= width {
-		return string(runes[:width])
-	}
-	return s + strings.Repeat(" ", width-len(runes))
-}
-
-type ILARowDisplay struct {
-	PairName string
-	Bias     string
-	Status   string
-	Changed  bool
-}
-
-func makeILATable(pairs []ILARowDisplay) string {
-	rows := []string{}
-	for _, p := range pairs {
-		biasStr := "⚪ Netr"
-		if p.Bias == "BEARISH" {
-			biasStr = "🔴 Sell"
-		} else if p.Bias == "BULLISH" {
-			biasStr = "🟢 Buy "
-		}
-
-		mark := ""
-		if p.Changed {
-			mark = " ◀"
-		}
-		stFull := padRight(p.Status+mark, 20)
-
-		rows = append(rows, fmt.Sprintf("│ %s │ %s │ %s │",
-			padRight(p.PairName, 9), biasStr, stFull))
-	}
-
+func makeILA2RadarBox(statusTitle, cycleDesc, dolStr, invStr string) string {
 	return fmt.Sprintf("```text\n"+
-		"┌───────────┬─────────┬──────────────────────┐\n"+
-		"│ Pasangan  │  Arah   │        Status        │\n"+
-		"├───────────┼─────────┼──────────────────────┤\n"+
-		"%s\n"+
-		"└───────────┴─────────┴──────────────────────┘\n```",
-		strings.Join(rows, "\n"),
-	)
+		"┌──────────────┬──────────────────────────────┐\n"+
+		"│ Status Setup │ %s │\n"+
+		"│ Siklus Lilin │ %s │\n"+
+		"│ Target (DOL) │ %s │\n"+
+		"│ Invalidation │ %s │\n"+
+		"└──────────────┴──────────────────────────────┘\n```",
+		padRight(statusTitle, 28),
+		padRight(cycleDesc, 28),
+		padRight(dolStr, 28),
+		padRight(invStr, 28))
 }
 
-// executeEnabled menandai apakah scanner boleh mengirim order ke broker.
-//
-// Default true: perilaku lama tidak berubah. Set -execute=false saat Runner
-// sudah mengambil alih eksekusi, agar tidak terjadi dua order untuk setup yang
-// sama (plans/04 §11). Pemantauan dan notifikasi tetap berjalan.
+func makeILA2OrderBox(brokerName, tfStr, ticket, entry, sl, tp, rr, riskLot string) string {
+	return fmt.Sprintf("```text\n"+
+		"┌──────────────┬──────────────────────────────┐\n"+
+		"│ Broker/Akun  │ %s │\n"+
+		"│ Setup & TF   │ %s │\n"+
+		"│ Tiket Order  │ %s │\n"+
+		"├──────────────┼──────────────────────────────┤\n"+
+		"│ Entry Price  │ %s │\n"+
+		"│ Stop Loss    │ %s │\n"+
+		"│ Take Profit  │ %s │\n"+
+		"│ Risk / Reward│ %s │\n"+
+		"│ Risiko & Lot │ %s │\n"+
+		"└──────────────┴──────────────────────────────┘\n```",
+		padRight(brokerName, 28),
+		padRight(tfStr, 28),
+		padRight(ticket, 28),
+		padRight(entry, 28),
+		padRight(sl, 28),
+		padRight(tp, 28),
+		padRight(rr, 28),
+		padRight(riskLot, 28))
+}
+
 var executeEnabled = true
 
 func main() {
 	flag.BoolVar(&executeEnabled, "execute", true,
 		"kirim order ke broker; false = hanya memantau dan memberi notifikasi")
 	flag.Parse()
-
-	if !executeEnabled {
-		fmt.Fprintln(os.Stderr, "EKSEKUSI DIMATIKAN: hanya memantau, tidak mengirim order")
-	}
 
 	_ = godotenv.Load("/opt/data/ila-engine/.env")
 	var messages []string
@@ -365,64 +337,64 @@ func main() {
 					continue
 				}
 
-			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
-			tol := 0.50
-			if !isGold {
-				tol = 0.00050
-			}
-
-			hitTP := false
-			hitSL := false
-
-			if pos.Direction == "BUY" {
-				if exitPrice >= (pos.TakeProfit - tol) {
-					hitTP = true
-				} else if exitPrice <= (pos.StopLoss + tol) {
-					hitSL = true
+				isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
+				tol := 0.50
+				if !isGold {
+					tol = 0.00050
 				}
-			} else {
-				if exitPrice <= (pos.TakeProfit + tol) {
-					hitTP = true
-				} else if exitPrice >= (pos.StopLoss - tol) {
-					hitSL = true
-				}
-			}
 
-			if !hitTP && !hitSL {
-				if actualPnL > 0 {
-					hitTP = true
+				hitTP := false
+				hitSL := false
+
+				if pos.Direction == "BUY" {
+					if exitPrice >= (pos.TakeProfit - tol) {
+						hitTP = true
+					} else if exitPrice <= (pos.StopLoss + tol) {
+						hitSL = true
+					}
 				} else {
-					hitSL = true
+					if exitPrice <= (pos.TakeProfit + tol) {
+						hitTP = true
+					} else if exitPrice >= (pos.StopLoss - tol) {
+						hitSL = true
+					}
 				}
+
+				if !hitTP && !hitSL {
+					if actualPnL > 0 {
+						hitTP = true
+					} else {
+						hitSL = true
+					}
+				}
+
+				status := "CLOSED_SL"
+				outcomeR := -1.0
+				if hitTP {
+					status = "CLOSED_TP"
+					outcomeR = pos.RiskReward
+				}
+
+				now := time.Now().UTC()
+				db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
+					"status":      status,
+					"exit_price":  exitPrice,
+					"profit_loss": actualPnL,
+					"outcome_r":   outcomeR,
+					"closed_at":   now,
+				})
+
+				pos.Status = status
+				pos.ExitPrice = exitPrice
+				pos.ProfitLoss = actualPnL
+				pos.OutcomeR = outcomeR
+				pos.ClosedAt = &now
+
+				// Run post-trade self learning evaluation
+				_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 			}
-
-			status := "CLOSED_SL"
-			outcomeR := -1.0
-			if hitTP {
-				status = "CLOSED_TP"
-				outcomeR = pos.RiskReward
-			}
-
-			now := time.Now().UTC()
-			db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
-				"status":      status,
-				"exit_price":  exitPrice,
-				"profit_loss": actualPnL,
-				"outcome_r":   outcomeR,
-				"closed_at":   now,
-			})
-
-			pos.Status = status
-			pos.ExitPrice = exitPrice
-			pos.ProfitLoss = actualPnL
-			pos.OutcomeR = outcomeR
-			pos.ClosedAt = &now
-
-			// Run post-trade self learning evaluation
-			_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 		}
 	}
-}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)
@@ -485,7 +457,6 @@ func main() {
 	nowUtc := time.Now().UTC()
 	utcHour := nowUtc.Hour()
 	utcDay := nowUtc.Weekday()
-	// Jam pasar dipakai dari satu sumber agar ILA 2.0 dan 3.0 tidak berbeda.
 	marketClosed := market.IsClosed(utcDay, utcHour)
 	currentSession := market.Session(utcDay, utcHour)
 
@@ -495,16 +466,19 @@ func main() {
 	// Session Transition Briefing
 	if inActiveSession && currentSession != lastSession {
 		state.LastSession = currentSession
-		sessTitle := cleanSessionName(currentSession)
-		messages = append(messages, fmt.Sprintf("🔔 **[%s] Sesi Pasar Aktif (Mode ILA)**\nRadar ILA aktif memantau setup di 4 pasangan timeframe (XAUUSD, EURUSD, USTEC).", strings.ToUpper(sessTitle)))
+		sessTitle := strings.ReplaceAll(currentSession, "_", " ")
+		messages = append(messages, fmt.Sprintf("🔔 **[%s] Sesi Pasar Aktif (Mode ILA 2.0)**\nRadar ILA aktif memantau setup adaptif berbasis penutupan lilin.", strings.ToUpper(sessTitle)))
 	} else if !inActiveSession {
 		state.LastSession = currentSession
 	}
 
-	// 7. ILA (Imaginary Liquidity) Multi-Timeframe Scan & Auto-Execution
+	// 5. ILA 2.0 Multi-Timeframe Scan & Auto-Execution
 	// Market closed (weekend / rollover) -> skip scan & execution entirely.
 	if marketClosed {
 		saveState(state)
+		if len(messages) > 0 {
+			fmt.Println(strings.Join(messages, "\n\n---\n\n"))
+		}
 		return
 	}
 
@@ -523,13 +497,22 @@ func main() {
 	for _, sym := range Pairs {
 		symName, symEmoji := getSymbolDisplay(sym)
 
-		var ilaRows []ILARowDisplay
-		var changedPairTitle string
-		var changedEventDesc string
-		var changedNextAction string
-
 		for _, ep := range allILAPairs {
 			ilaKey := fmt.Sprintf("%s-%s-%s", sym, ep.HTF, ep.LTF)
+			prevILA := state.ILAPairs[ilaKey]
+
+			// Scheduler Berbasis Penutupan Lilin (Candle-Close Scheduling):
+			// Jika status menunggu CISD di LTF, jadwal mengikuti penutupan lilin LTF.
+			// Selain itu, jadwal mengikuti penutupan lilin HTF.
+			checkTF := ep.HTF
+			if prevILA.LastStatus == "WAIT_LTF_CISD" || prevILA.LastStatus == "READY_TO_ENTRY" {
+				checkTF = ep.LTF
+			}
+
+			if !slotDue(prevILA.LastEvaluatedAt, checkTF, nowUtc, 3*time.Second) {
+				continue
+			}
+
 			setup, err := ilaService.AnalyzeILA2(ctx, dto.ILA2AnalysisRequest{
 				Symbol: sym,
 				HTF:    ep.HTF,
@@ -540,60 +523,27 @@ func main() {
 				continue
 			}
 
-			prevILA := state.ILAPairs[ilaKey]
+			prevILA.LastEvaluatedAt = nowUtc
 
-			// Scenario A: ILA Auto-Execution (Focus on actionable intraday/swing pairs)
+			dir := "BUY"
+			if setup.Bias == "BEARISH" {
+				dir = "SELL"
+			}
+			dirEmoji := "🟢 BUY"
+			if dir == "SELL" {
+				dirEmoji = "🔴 SELL"
+			}
+
+			// Scenario A: Auto-Execution / Entry Ready Alert
 			if (ep.HTF == "H4" || ep.HTF == "D1") && setup.Status == "READY_TO_ENTRY" && setup.PassedMinRR && setup.HTFSweep != nil && !setup.HTFSweep.SweepInProgress && setup.CISD != nil && setup.CISD.Detected {
 				breakTimeStr := setup.CISD.BreakTime.Format(time.RFC3339)
 				if prevILA.LastBreakTime != breakTimeStr || prevILA.LastStatus != "ENTRY" {
-					dir := "BUY"
-					if setup.Bias == "BEARISH" {
-						dir = "SELL"
-					}
-					dirEmoji := "🟢 BUY"
-					if dir == "SELL" {
-						dirEmoji = "🔴 SELL"
-					}
-
-					if isTradeLocked {
-						if prevILA.LastStatus != "DAILY_TRADE_LOCK" || prevILA.LastBreakTime != breakTimeStr {
-							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi ditahan:** %s\n• **Keputusan di tangan Anda:** entry manual jika setuju dengan setup ini.",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
-								formatPrice(sym, setup.EntryPrice), formatPrice(sym, setup.StopLoss), formatPrice(sym, setup.TakeProfit), setup.RiskReward,
-								tradeLockReason))
-							prevILA.LastBreakTime = breakTimeStr
-							prevILA.LastStatus = "DAILY_TRADE_LOCK"
-							prevILA.LastHTFStatus = setup.Status
-							state.ILAPairs[ilaKey] = prevILA
-						}
-						continue
-					}
-
-					// Cek posisi aktif khusus ILA di timeframe yang sama agar posisi ILA baru tetap diizinkan buka
-					var countOpenILA int64
-					db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).Count(&countOpenILA)
-					if countOpenILA > 0 {
-						if prevILA.LastStatus != "OPEN_POS_HOLD" || prevILA.LastBreakTime != breakTimeStr {
-							var existingPos model.Position
-							db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).First(&existingPos)
-							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi ditahan:** masih ada posisi ILA terbuka (#%s %s %.2f lot).\n• **Keputusan di tangan Anda:** entry manual jika setuju, atau tunggu posisi lama selesai.",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
-								formatPrice(sym, setup.EntryPrice), formatPrice(sym, setup.StopLoss), formatPrice(sym, setup.TakeProfit), setup.RiskReward,
-								existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize))
-							prevILA.LastBreakTime = breakTimeStr
-							prevILA.LastStatus = "OPEN_POS_HOLD"
-							prevILA.LastHTFStatus = setup.Status
-							state.ILAPairs[ilaKey] = prevILA
-						}
-						continue
-					}
-
 					entryPrice := setup.EntryPrice
 					sl := setup.StopLoss
 					tp := setup.TakeProfit
 
-					riskPercent := 0.50 // Strictly dynamic 0.5% live equity risk
-					equity := 10000.0   // Default fallback equity
+					riskPercent := DefaultRiskPercent
+					equity := AccountSize
 					acc, err := tradeBroker.GetAccountInfo(ctx)
 					if err == nil && acc != nil && acc.Equity > 0 {
 						equity = acc.Equity
@@ -605,14 +555,67 @@ func main() {
 
 					setupID := fmt.Sprintf("ILA-%s-%s-%s-%s", sym, ep.HTF, ep.LTF, time.Now().Format("200601021504"))
 
-					if !executeEnabled {
-						// Order tidak dikirim: setup tetap dilaporkan sebagai
-						// notifikasi manual agar tidak ada sinyal yang hilang.
-						if inActiveSession {
-							messages = append(messages, fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n• Setup: ILA (%s ➡️ %s) siap entry.\n• Entry: %s | SL: %s | TP: %s (R:R 1:%.2f)\n• **Auto-eksekusi dimatikan (mode pantau).**",
-								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF,
-								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp), setup.RiskReward))
+					if isTradeLocked {
+						if prevILA.LastStatus != "DAILY_TRADE_LOCK" || prevILA.LastBreakTime != breakTimeStr {
+							table := makeILA2OrderBox(
+								"Match-Trader Prop (#1089632)",
+								fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
+								"ENTRY MANUAL (LOCK)",
+								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
+								fmt.Sprintf("1:%.2f", setup.RiskReward),
+								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+							)
+							actionPlan := getILA2ActionPlan("DAILY_TRADE_LOCK", ep.HTF, ep.LTF, setup.Bias)
+							msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, tradeLockReason, actionPlan)
+							messages = append(messages, msg)
+							prevILA.LastBreakTime = breakTimeStr
+							prevILA.LastStatus = "DAILY_TRADE_LOCK"
+							prevILA.LastHTFStatus = setup.Status
+							state.ILAPairs[ilaKey] = prevILA
 						}
+						continue
+					}
+
+					var countOpenILA int64
+					db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).Count(&countOpenILA)
+					if countOpenILA > 0 {
+						if prevILA.LastStatus != "OPEN_POS_HOLD" || prevILA.LastBreakTime != breakTimeStr {
+							var existingPos model.Position
+							db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).First(&existingPos)
+							table := makeILA2OrderBox(
+								"Match-Trader Prop (#1089632)",
+								fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
+								"ENTRY MANUAL (HOLD)",
+								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
+								fmt.Sprintf("1:%.2f", setup.RiskReward),
+								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+							)
+							actionPlan := getILA2ActionPlan("OPEN_POS_HOLD", ep.HTF, ep.LTF, setup.Bias)
+							msg := fmt.Sprintf("⏳ **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n⚠️ **AUTO-EKSEKUSI DITAHAN:**\n• Masih ada posisi aktif ILA (#%s %s %.2f lot).\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+								symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, existingPos.TicketNumber, existingPos.Direction, existingPos.LotSize, actionPlan)
+							messages = append(messages, msg)
+							prevILA.LastBreakTime = breakTimeStr
+							prevILA.LastStatus = "OPEN_POS_HOLD"
+							prevILA.LastHTFStatus = setup.Status
+							state.ILAPairs[ilaKey] = prevILA
+						}
+						continue
+					}
+
+					if !executeEnabled {
+						table := makeILA2OrderBox(
+							"Match-Trader Prop (#1089632)",
+							fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
+							"MODE PANTAU",
+							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
+							fmt.Sprintf("1:%.2f", setup.RiskReward),
+							fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+						)
+						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
+						msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - MODE PANTAU] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n%s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+							symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, actionPlan)
+						messages = append(messages, msg)
 						prevILA.LastStatus = "READY_TO_ENTRY"
 						state.ILAPairs[ilaKey] = prevILA
 						continue
@@ -649,91 +652,85 @@ func main() {
 							RiskReward:   setup.RiskReward,
 							Status:       "OPEN",
 							OpenedAt:     nowDt,
-							Notes:        fmt.Sprintf("Broker: Match-Trader (1089632) | Metode: ILA (%s ➡️ %s) | %s", ep.HTF, ep.LTF, setup.Summary),
+							Notes:        fmt.Sprintf("Broker: Match-Trader (1089632) | Metode: ILA 2.0 (%s ➡️ %s) | %s", ep.HTF, ep.LTF, setup.Summary),
 						})
 
-						entryAlert := fmt.Sprintf(`🚀 **[ORDER REAL ILA 2.0 - MATCH-TRADER] %s %s • %s**
-• **Akun Eksekusi:** Match-Trader Prop (#1089632)
-• **Strategi:** ILA 2.0 (%s ➡️ %s) | **Tiket:** `+"`%s`"+`
-• **Entry:** `+"`%s`"+` | **SL:** `+"`%s`"+` | **TP:** `+"`%s`"+`
-• **R:R:** `+"`1:%.2f`"+` | **Risiko:** 0.50%% Live Equity
-⚡ *Posisi aktif di Match-Trader dengan SL/TP otomatis!*`,
-							symEmoji, symName, dirEmoji,
-							ep.HTF, ep.LTF, orderRes.TicketNumber,
+						table := makeILA2OrderBox(
+							"Match-Trader Prop (#1089632)",
+							fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
+							"#"+orderRes.TicketNumber,
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
-							setup.RiskReward,
+							fmt.Sprintf("1:%.2f", setup.RiskReward),
+							fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", riskPercent, riskDollars, lot),
 						)
+						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
+						entryAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 2.0] %s %s • %s**\n\n%s\n\n⚡ **KONDISI STRUKTUR PASAR:**\n• **HTF (%s):** %s\n• **LTF (%s):** %s\n\n👉 **TRADING ACTION PLAN & MANAGEMENT:**\n• %s",
+							symEmoji, symName, dirEmoji, table, ep.HTF, setup.HTFSweep.Details, ep.LTF, setup.CISD.Details, actionPlan)
 						messages = append(messages, entryAlert)
 
 						prevILA.LastBreakTime = breakTimeStr
 						prevILA.LastStatus = "ENTRY"
 						prevILA.LastHTFStatus = setup.Status
+						state.ILAPairs[ilaKey] = prevILA
 					} else {
 						messages = append(messages, fmt.Sprintf("⚠️ **Gagal Auto-Eksekusi ILA Match-Trader (%s %s ➡️ %s):** %v", sym, ep.HTF, ep.LTF, err))
 					}
+					continue
 				}
 			}
 
-			// Determine display status label
-			stLabel := "Menunggu"
-			if setup.Status == "READY_TO_ENTRY" {
-				stLabel = "🎯 Siap Entry"
-			} else if setup.Status == "WAIT_HTF_CANDLE_CLOSE" {
-				stLabel = fmt.Sprintf("⏳ Tunggu Close %s", ep.HTF)
-			} else if setup.Status == "WAIT_LTF_CISD" {
-				stLabel = "⏳ Tunggu CISD"
-			} else if setup.Status == "WAIT_HTF_SWEEP" {
-				stLabel = "⏳ Tunggu Sweep"
-			} else if setup.Status == "WAIT_HTF_FVG" {
-				stLabel = "⏳ Belum Ada FVG"
-			}
+			// Scenario B: Progress Radar Alert per Timeframe Slot (Single-Slot Dedicated Bubble)
+			if prevILA.LastStatus != setup.Status {
+				if inActiveSession && prevILA.LastStatus != "" {
+					stLabel := "⏳ Menunggu"
+					switch setup.Status {
+					case "WAIT_HTF_SWEEP":
+						stLabel = "⏳ Menunggu Sweep FVG"
+					case "WAIT_HTF_CANDLE_CLOSE":
+						stLabel = fmt.Sprintf("⏳ Menunggu Close %s", ep.HTF)
+					case "WAIT_LTF_CISD":
+						stLabel = "⏳ Berburu Trigger CISD"
+					case "READY_TO_ENTRY":
+						stLabel = "🎯 Siap Eksekusi"
+					case "INVALIDATED":
+						stLabel = "🛑 Setup Expired/Batal"
+					}
 
-			isPairChanged := prevILA.LastStatus != "" && prevILA.LastStatus != setup.Status
-			if isPairChanged && changedPairTitle == "" {
-				changedPairTitle = fmt.Sprintf("%s ➡️ %s", ep.HTF, ep.LTF)
-				if setup.Status == "WAIT_HTF_CANDLE_CLOSE" {
-					changedEventDesc = fmt.Sprintf("Candle sweep %s sedang terbentuk di dalam FVG (masih running).", ep.HTF)
-				} else if setup.Status == "WAIT_LTF_CISD" {
-					changedEventDesc = fmt.Sprintf("Candle sweep %s resmi TUTUP di dalam FVG & sweep valid.", ep.HTF)
-				} else if setup.Status == "READY_TO_ENTRY" {
-					changedEventDesc = fmt.Sprintf("CISD %s terkonfirmasi tembus by body!", ep.LTF)
-				} else {
-					changedEventDesc = fmt.Sprintf("Status %s ➡️ %s berubah menjadi %s", ep.HTF, ep.LTF, stLabel)
+					cycleDesc := fmt.Sprintf("Lilin %s (%s)", ep.HTF, formatNYTime(nowUtc))
+					dolStr := "Mencari Eksternal DOL"
+					if setup.TakeProfit > 0 {
+						dolStr = formatPrice(sym, setup.TakeProfit)
+					}
+					invStr := "Batas Ekor HTF"
+					if setup.StopLoss > 0 {
+						invStr = formatPrice(sym, setup.StopLoss)
+					}
+
+					table := makeILA2RadarBox(stLabel, cycleDesc, dolStr, invStr)
+					actionPlan := getILA2ActionPlan(setup.Status, ep.HTF, ep.LTF, setup.Bias)
+
+					htfDetail := setup.Summary
+					if setup.HTFSweep != nil && setup.HTFSweep.Details != "" {
+						htfDetail = setup.HTFSweep.Details
+					}
+					ltfDetail := "Memasuki jendela Candle 5. Menunggu validasi CISD."
+					if setup.CISD != nil && setup.CISD.Details != "" {
+						ltfDetail = setup.CISD.Details
+					}
+
+					radarMsg := fmt.Sprintf("📊 **[ILA 2.0 RADAR] %s %s • %s**\n`Timeframe Slot: %s ➡️ %s`\n\n%s\n\n🏛️ **STRUKTUR HTF (%s):**\n• %s\n\n⚡ **TRIGGER LTF (%s):**\n• %s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
+						symEmoji, symName, dirEmoji, ep.HTF, ep.LTF, table, ep.HTF, htfDetail, ep.LTF, ltfDetail, actionPlan)
+					messages = append(messages, radarMsg)
 				}
-				changedNextAction = setup.NextAction
+
+				finalStatus := setup.Status
+				if prevILA.LastStatus == "ENTRY" && setup.Status == "READY_TO_ENTRY" {
+					finalStatus = "ENTRY"
+				}
+				prevILA.LastStatus = finalStatus
+				prevILA.LastHTFStatus = setup.Status
 			}
-
-			ilaRows = append(ilaRows, ILARowDisplay{
-				PairName: ep.PairName,
-				Bias:     setup.Bias,
-				Status:   stLabel,
-				Changed:  isPairChanged,
-			})
-
-			finalStatus := setup.Status
-			if prevILA.LastStatus == "ENTRY" && setup.Status == "READY_TO_ENTRY" {
-				finalStatus = "ENTRY"
-			}
-			state.ILAPairs[ilaKey] = ILAPairState{
-				LastBreakTime: prevILA.LastBreakTime,
-				LastStatus:    finalStatus,
-				LastHTFStatus: setup.Status,
-			}
-		}
-
-		// Scenario B: Progress Update for ILA (Pilihan 1: Highlight + 4-Pair Table)
-		if inActiveSession && changedPairTitle != "" && len(ilaRows) > 0 {
-			progMsg := fmt.Sprintf(`🔔 **[%s] Update ILA: %s Maju Step!**
-• **Kejadian:** %s
-• **Langkah:** %s
-
-📊 **Status ILA 4-Timeframe:**
-%s`,
-				symName, changedPairTitle,
-				changedEventDesc, changedNextAction,
-				makeILATable(ilaRows),
-			)
-			messages = append(messages, progMsg)
+			state.ILAPairs[ilaKey] = prevILA
 		}
 	}
 
