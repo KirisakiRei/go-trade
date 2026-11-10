@@ -119,9 +119,20 @@ func latestCandleClose(tf string, t time.Time) time.Time {
 	case "H1", "1H", "60", "60M":
 		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
 	case "H4", "4H", "240", "240M":
-		return time.Date(t.Year(), t.Month(), t.Day(), (t.Hour()/4)*4, 0, 0, 0, time.UTC)
+		tInNY := t.In(nyLocation)
+		nyHour := tInNY.Hour()
+		closeHour := nyHour - ((nyHour - 1 + 24) % 4)
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), closeHour, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
 	case "D", "D1", "1D":
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		tInNY := t.In(nyLocation)
+		closeDay := tInNY.Day()
+		if tInNY.Hour() < 17 {
+			tInNY = tInNY.AddDate(0, 0, -1)
+			closeDay = tInNY.Day()
+		}
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), closeDay, 17, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
 	case "W", "W1", "1W":
 		days := (int(t.Weekday()) + 6) % 7
 		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)
