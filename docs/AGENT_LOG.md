@@ -242,6 +242,26 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] PERBAIKAN — Sinkronisasi H4/D1 Candle-Close ke NY Close & Dukungan External-to-Internal Sweep
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN / DOMAIN LOGIC
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Koreksi Formula Penjadwalan H4 & D1 (`cmd/scanner` & `cmd/ila3-scanner`):**
+    - **Akar Masalah:** Fungsi `latestCandleClose` sebelumnya menggunakan formula `(t.Hour()/4)*4` UTC murni (berasumsi H4 tutup pada 00:00, 04:00, 08:00 UTC). Padahal di pasar forex/CFD dan TradingView, lilin H4 ditutup mengikuti New York Close (17:00 NY = 22:00, 02:00, 06:00, 10:00, 14:00, 18:00 UTC). Akibatnya, pada saat lilin H4 jam 06:00 UTC resmi tutup, scheduler keliru menghitung bahwa lilin tutup jam 04:00 sehingga pembaruan radar H4 tidak terpanggil.
+    - **Solusi:** Menyelaraskan formula `latestCandleClose` dengan `nyLocation`: siklus H4 dihitung presisi pada `01:00, 05:00, 09:00, 13:00, 17:00, 21:00 NY` (daylight-saving safe), dan D1 pada `17:00 NY`.
+  - **Dukungan External-to-Internal Sweep (`pkg/ila/evaluator.go`):**
+    - **Akar Masalah:** Evaluator sebelumnya mensyaratkan lilin acuan (`cPrev`) sudah harus berada di dalam FVG (`cPrev.Low <= FVG.Top`). Akibatnya, formasi *textbook* di mana lilin acuan parkir tipis di atas FVG lalu lilin berikutnya menyapu ekor tersebut sekaligus menusuk masuk ke dalam FVG (*External-to-Internal Sweep* seperti pinbar USTEC H4) terabaikan.
+    - **Solusi:** Melonggarkan batasan agar lilin sweep yang menyapu lilin sebelumnya dan menusuk masuk ke dalam FVG langsung sah diakui sebagai Sweep Candle 4.
+  - **Hasil Nyata:**
+    - USTEC H4 ➡️ M15 seketika tervalidasi sebagai **`WAIT_LTF_CISD (BULLISH)`**:
+      - HTF Sweep terkonfirmasi di lilin 09 Nov 21:00 NY (menusuk ke 27766.60 di Bullish FVG `27275.40 - 27786.75`).
+      - Target DOL: `28023.15` (BSL).
+      - Trigger LTF M15 aktif memantau penembusan body > `27929.60`.
+    - Alert radar box ASCII berhasil dipancarkan ke Telegram.
+
+---
+
 ### [2026-11-10] PERBAIKAN — Format Alert HTF-MTF-LTF First & Pemilihan FVG Terakhir Murni (ILA 3.0 & ILA 2.0)
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN / FORMATTING
