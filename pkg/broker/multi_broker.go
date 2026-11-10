@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,13 @@ func (m *MultiBrokerManager) GetAccountInfo(ctx context.Context) (*AccountInfo, 
 	}, lastErr
 }
 
+func (m *MultiBrokerManager) GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error) {
+	if len(m.brokers) > 0 {
+		return m.brokers[0].GetSymbolSpec(ctx, symbol)
+	}
+	return FallbackSymbolSpec(symbol), nil
+}
+
 func (m *MultiBrokerManager) ExecuteOrder(ctx context.Context, req OrderRequest) (*OrderResponse, error) {
 	if len(m.brokers) == 0 {
 		return nil, fmt.Errorf("no brokers configured for multi-execution")
@@ -72,46 +80,41 @@ func (m *MultiBrokerManager) ExecuteOrder(ctx context.Context, req OrderRequest)
 	var errs []string
 
 	for _, b := range m.brokers {
-		// Calculate dynamic 1.0% live equity risk specifically for THIS broker
+		// Calculate dynamic 1.0% live equity risk specifically for THIS broker using dynamic SymbolSpec
 		acc, err := b.GetAccountInfo(ctx)
 		lot := req.LotSize
 		if err == nil && acc != nil && acc.Equity > 0 {
 			riskDollars := acc.Equity * 0.01 // strict 1.0% live equity risk
-			slDist := req.OpenPrice - req.StopLoss
-			if slDist < 0 {
-				slDist = -slDist
-			}
+			slDist := math.Abs(req.OpenPrice - req.StopLoss)
 			if slDist > 0 {
-				sym := strings.ToUpper(strings.ReplaceAll(req.Symbol, "/", ""))
-				switch {
-				case strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD"):
-					lot = riskDollars / (slDist * 100.0)
-				case strings.Contains(sym, "EUR") || strings.Contains(sym, "GBP") || strings.Contains(sym, "AUD"):
-					lot = riskDollars / (slDist * 100000.0)
-				case strings.Contains(sym, "USTEC") || strings.Contains(sym, "NAS100") || strings.Contains(sym, "US100"):
-					lot = riskDollars / (slDist * 1.0)
+				spec, specErr := b.GetSymbolSpec(ctx, req.Symbol)
+				if specErr != nil || spec == nil || spec.PointValue <= 0 {
+					spec = FallbackSymbolSpec(req.Symbol)
 				}
-				// Clamp
-				if lot < 0.01 {
-					lot = 0.01
-				}
-				if lot > 20.0 {
-					lot = 20.0
-				}
-				// Round
-				if strings.Contains(sym, "USTEC") || strings.Contains(sym, "NAS100") || strings.Contains(sym, "US100") {
-					lot = float64(int(lot*10)) / 10.0 // 0.10 step
-					if lot < 0.10 {
-						lot = 0.10
+				if spec.PointValue > 0 {
+					dollarLossPerLot := slDist * spec.PointValue
+					rawLot := riskDollars / dollarLossPerLot
+					step := spec.VolumeStep
+					if step <= 0 {
+						step = 0.01
 					}
-				} else {
-					lot = float64(int(lot*100)) / 100.0 // 0.01 step
+					lot = math.Floor(rawLot/step) * step
+					if spec.VolumeMin > 0 && lot < spec.VolumeMin {
+						lot = spec.VolumeMin
+					}
+					if spec.VolumeMax > 0 && lot > spec.VolumeMax {
+						lot = spec.VolumeMax
+					}
+					// Max risk assertion gate: if lot * dollarLossPerLot > riskDollars * 1.10, clamp down
+					if lot > spec.VolumeMin && (lot*dollarLossPerLot) > (riskDollars*1.10) {
+						lot = math.Floor((riskDollars/dollarLossPerLot)/step) * step
+					}
 				}
 			}
 		}
 
 		brokerReq := req
-		brokerReq.LotSize = lot
+		brokerReq.LotSize = math.Round(lot*100) / 100.0
 
 		resp, err := b.ExecuteOrder(ctx, brokerReq)
 		if err != nil {

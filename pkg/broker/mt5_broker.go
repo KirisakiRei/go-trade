@@ -55,6 +55,10 @@ func (b *MT5GatewayBroker) GetAccountInfo(ctx context.Context) (*AccountInfo, er
 	return &acc, nil
 }
 
+func (b *MT5GatewayBroker) GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error) {
+	return FallbackSymbolSpec(symbol), nil
+}
+
 func (b *MT5GatewayBroker) ExecuteOrder(ctx context.Context, req OrderRequest) (*OrderResponse, error) {
 	url := b.baseURL + "/order"
 	payload := map[string]any{

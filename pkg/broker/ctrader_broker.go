@@ -178,6 +178,40 @@ func (b *CTraderBroker) Name() string {
 	return "IC Markets cTrader (Native Go)"
 }
 
+func (b *CTraderBroker) GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error) {
+	upper := strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
+	switch {
+	case strings.Contains(upper, "XAU") || strings.Contains(upper, "GOLD"):
+		return &SymbolSpec{
+			Symbol:         symbol,
+			PointValue:     100.0,
+			VolumeMin:      0.01,
+			VolumeStep:     0.01,
+			VolumeMax:      20.0,
+			PricePrecision: 2,
+		}, nil
+	case strings.Contains(upper, "USTEC") || strings.Contains(upper, "NAS") || strings.Contains(upper, "US100") || strings.Contains(upper, "US500") || strings.Contains(upper, "US30"):
+		return &SymbolSpec{
+			Symbol:         symbol,
+			PointValue:     1.0, // cTrader IC Markets index CFD is $1.00 USD per point
+			VolumeMin:      0.10, // cTrader step volume for index CFDs is 0.10 lot
+			VolumeStep:     0.10,
+			VolumeMax:      20.0,
+			PricePrecision: 2,
+		}, nil
+	default:
+		// Forex
+		return &SymbolSpec{
+			Symbol:         symbol,
+			PointValue:     100000.0,
+			VolumeMin:      0.01,
+			VolumeStep:     0.01,
+			VolumeMax:      20.0,
+			PricePrecision: 5,
+		}, nil
+	}
+}
+
 func (b *CTraderBroker) GetAccountInfo(ctx context.Context) (*AccountInfo, error) {
 	if err := b.ensureConnected(ctx); err != nil {
 		return nil, err

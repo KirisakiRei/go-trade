@@ -1,30 +1,37 @@
 # 04. KEBIJAKAN MANAJEMEN RISIKO & PROTOKOL EKSEKUSI (POLICIES)
 
-## 1. Dynamic 1.0% Live Equity Lot Sizing
+## 1. Dynamic 1.0% Live Equity Lot Sizing & Dynamic Symbol Spec
 
-Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **1.0% dari live equity** akun broker saat sinyal tervalidasi:
+Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **1.0% dari live equity** akun broker saat sinyal tervalidasi dengan membaca spesifikasi kontrak broker secara dinamis:
 
 $$\text{Risk Dollars} = \text{Live Equity} \times 0.01$$
 
-$$\text{Lot Size} = \frac{\text{Risk Dollars}}{\text{Jarak SL} \times \text{Contract Size}}$$
+$$\text{Dollar Loss Per Lot} = |\text{Entry} - \text{Stop Loss}| \times \text{PointValue}$$
 
-### Parameter 1.0% untuk ILA 2.0 & ILA 3.0:
-* Akun $10.000 (Match-Trader): Risiko per trade = **$100.00**.
-* Akun $100.000 (cTrader): Risiko per trade = **$1,000.00**.
-* Maksimal drawdown harian jika 2x SL berturut-turut terkunci rapat di **-2.0%** (tetap aman di bawah batas Max Daily Loss 5.0% prop firm).
+$$\text{Lot Size} = \text{math.Floor}\left(\frac{\text{Risk Dollars}}{\text{Dollar Loss Per Lot} \times \text{VolumeStep}}\right) \times \text{VolumeStep}$$
 
-### Parameter Spesifikasi Kontrak Simbol:
+### Mengapa Perlu Pembacaan Spesifikasi Dinamis (`GetSymbolSpec`)?
+Setiap broker memiliki spesifikasi kontrak instrumen yang berbeda-beda, terutama pada instrumen Indeks:
+* **Match-Trader (Prop Firm):** Mengadopsi spesifikasi CME E-mini futures. Simbol `US100` memiliki `multiplier: 20`, sehingga **1.00 lot = $20.00 per poin indeks**.
+* **cTrader (IC Markets):** Mengadopsi spesifikasi retail mini-CFD. Simbol `USTEC` bernilai **$1.00 per poin indeks**.
+* **TradeLocker & Broker Lain:** Multiplier bisa bervariasi ($1, $5, $10, $20, $50, $100 per poin).
+
+Engine mengimplementasikan method `GetSymbolSpec` pada interface `Broker` yang otomatis meng-query endpoint broker (`GET /symbols` di Match-Trader / Protobuf di cTrader) saat startup, sehingga:
+* Pada Match-Trader (SL 78 poin, equity $13k, risk $131), lot dihitung presisi **0.08 lot** ($124.80 risk).
+* Pada cTrader (SL 78 poin, equity $98k, risk $985), lot dihitung presisi **12.60 lot** ($982.80 risk).
+
+### Parameter Standar Fallback:
 1. **XAU/USD (Gold):**
-   * Contract Size: `100` troy oz per lot.
-   * Nilai Tick: $0.01 = $1.00 per 1.00 lot.
-   * Jarak SL $1.00 pada 1.00 lot = risiko $100.
+   * PointValue: `$100.0` ($10/pip atau $100 per $1.00 move per lot).
+   * VolumeStep: `0.01 Lot`.
 2. **Forex Majors (EUR/USD, GBP/USD, dll):**
-   * Contract Size: `100.000` unit base currency.
-   * Nilai Pip: 1 pip (0.00010) pada 1.00 lot = $10.00.
+   * PointValue: `$100,000.0` (1 pip 0.00010 pada 1.00 lot = $10.00).
+   * VolumeStep: `0.01 Lot`.
 3. **Indeks NAS100 / USTEC / US100:**
-   * Contract Size: `1` unit per poin.
-   * **Volume Step Wajib: `0.10 Lot`** (Minimum 0.10 lot).
-   * Rumus Pembulatan: `math.Floor(lot * 10) / 10.0` (mencegah error broker `TRADING_BAD_VOLUME`).
+   * Match-Trader: `US100` PointValue = `$20.0`, VolumeStep = `0.01 Lot`.
+   * cTrader: `USTEC` PointValue = `$1.0`, VolumeStep = `0.10 Lot`.
+4. **Max Risk Assertion Gate:**
+   * Jika pembulatan lot membuat estimasi loss melebihi `Target Risk * 1.10` (toleransi 10%), lot otomatis diturunkan 1 step ke bawah demi menjamin risiko tidak pernah bengkak.
 
 ### Batasan Clamp Lot:
 * Batas minimal (*floor*): `0.01 Lot` (atau `0.10 Lot` untuk Indeks).

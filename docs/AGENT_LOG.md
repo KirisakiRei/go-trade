@@ -242,6 +242,38 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] FITUR & RISK MANAGEMENT — Dynamic Contract Specification Reader & Adaptive Lot Sizing (Multi-Broker Protection)
+- **Pelaku:** Hermes
+- **Tipe:** FITUR / RISK MANAGEMENT
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Akar Masalah (Insiden US100 Match-Trader 1.60 Lot):**
+    - Di Match-Trader (#1089632), instrumen indeks `US100` berbasis kontrak CME E-mini futures dengan `multiplier: 20` ($20 per 1.00 poin indeks per lot).
+    - Di cTrader (#10131354), instrumen indeks `USTEC` bernilai mini-CFD ($1.00 per poin indeks per lot).
+    - Hardcoded multiplier $1/poin sebelumnya menyebabkan pembukaan 1.60 lot di Match-Trader yang setara $32.00/poin ($2.496 risk jika kena SL 78 poin, jauh melebihi alokasi 1.0% equity $131).
+  - **Arsitektur Solusi Universal (`pkg/broker/types.go`):**
+    - Menambahkan struct `SymbolSpec` dan method `GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error)` ke interface `Broker`.
+    - **Match-Trader (`pkg/broker/matchtrader_broker.go`):** Query otomatis endpoint `GET /symbols` saat startup dan meng-cache spesifikasi riil broker:
+      - `US100`: `PointValue = 20.0`, `VolumeStep = 0.01`, `VolumeMin = 0.01`
+      - `US500`: `PointValue = 50.0`, `VolumeStep = 0.01`, `VolumeMin = 0.01`
+      - `US30`: `PointValue = 5.0`, `VolumeStep = 0.01`, `VolumeMin = 0.01`
+      - `XAUUSD`: `PointValue = 100.0`, `VolumeStep = 0.01`, `VolumeMin = 0.01`
+      - `EURUSD`: `PointValue = 100000.0`, `VolumeStep = 0.01`, `VolumeMin = 0.01`
+    - **cTrader (`pkg/broker/ctrader_broker.go`):** Query spesifikasi cTrader IC Markets (`USTEC`: $1/poin, step 0.10, min 0.10).
+    - **MultiBrokerManager (`pkg/broker/multi_broker.go`):** Setiap broker dalam eksekusi multi-broker menghitung lot secara proporsional menggunakan `b.GetSymbolSpec()`.
+  - **Kalkulator Risiko Universal & Max Risk Assertion Gate (`pkg/risk/calculator.go`):**
+    - `CalculateLotWithSpec`: Menghitung lot berbasis `DollarLossPerLot = PriceDist * Spec.PointValue`.
+    - `RawLot = RiskDollars / DollarLossPerLot`.
+    - **Max Risk Assertion Gate:** Jika pembulatan lot membuat estimasi kerugian melebihi toleransi `Target Risk * 1.10`, lot otomatis diturunkan 1 step ke bawah demi menjamin risiko tidak pernah bengkak.
+    - Pada US100 Match-Trader (SL 78 poin, equity $13,131, risk 1% = $131.31), ukuran lot sekarang terhitung presisi **0.08 Lot** ($124.80 risk riil / 0.95% equity).
+  - **Tampilan Order Box Telegram (`cmd/scanner` & `cmd/ila3-scanner`):**
+    - Menyertakan baris `│ Spesifikasi  │ $20.00 / poin index          │` secara transparan sebelum rincian risiko dan lot.
+  - **Pengujian & Verifikasi:**
+    - `go test -v ./pkg/risk/... ./pkg/broker/...` -> **PASS 100%**.
+    - Unit test baru `TestCalculateLotUS100MatchTraderMultiplier` (0.08 lot) dan `TestCalculateLotUSTECcTrader` (1.60 lot) lulus.
+
+---
+
 ### [2026-11-10] PERBAIKAN — Sinkronisasi H4/D1 Candle-Close ke NY Close & Dukungan External-to-Internal Sweep
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN / DOMAIN LOGIC

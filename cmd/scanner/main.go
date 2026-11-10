@@ -141,44 +141,48 @@ func latestCandleClose(tf string, t time.Time) time.Time {
 	}
 }
 
-func calcLot(symbol string, entry, sl, riskAmount float64) float64 {
-	isGold := strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD")
-	isIndex := strings.Contains(symbol, "NAS") || strings.Contains(symbol, "TEC") || strings.Contains(symbol, "US100") || strings.Contains(symbol, "US30") || strings.Contains(symbol, "US500") || strings.Contains(symbol, "NDX")
+func calcLot(ctx context.Context, b broker.Broker, symbol string, entry, sl, riskAmount float64) (float64, *broker.SymbolSpec) {
+	spec, err := b.GetSymbolSpec(ctx, symbol)
+	if err != nil || spec == nil || spec.PointValue <= 0 {
+		spec = broker.FallbackSymbolSpec(symbol)
+	}
+
 	priceDist := math.Abs(entry - sl)
-	if priceDist <= 0 {
-		return 0.01
+	if priceDist <= 0.000001 || riskAmount <= 0 {
+		return spec.VolumeMin, spec
 	}
 
-	var pips float64
-	var pipVal float64 = 10.0
+	dollarRiskPerLot := priceDist * spec.PointValue
+	rawLot := (riskAmount / dollarRiskPerLot) + 1e-8
 
-	if isGold {
-		pips = priceDist / 0.10
-	} else if isIndex {
-		pips = priceDist / 1.0
-		pipVal = 1.0
-	} else {
-		pips = priceDist / 0.00010
+	step := spec.VolumeStep
+	if step <= 0 {
+		step = 0.01
 	}
+	lot := math.Floor(rawLot/step) * step
 
-	if pips < 1.0 {
-		pips = 1.0
-	}
-
-	lot := riskAmount / (pips * pipVal)
-	lot = math.Round(lot*100) / 100
-	minLot := 0.01
-	if isIndex {
-		minLot = 0.10
-		lot = math.Floor(lot*10) / 10.0
+	minLot := spec.VolumeMin
+	if minLot <= 0 {
+		minLot = 0.01
 	}
 	if lot < minLot {
-		return minLot
+		lot = minLot
 	}
-	if lot > 20.0 {
-		return 20.0
+
+	maxLot := spec.VolumeMax
+	if maxLot <= 0 {
+		maxLot = 20.0
 	}
-	return lot
+	if lot > maxLot {
+		lot = maxLot
+	}
+
+	// Max risk assertion gate: if lot * dollarRiskPerLot exceeds budget by > 10%, clamp down
+	if lot > minLot && (lot*dollarRiskPerLot) > (riskAmount*1.10) {
+		lot = math.Floor((riskAmount/dollarRiskPerLot)/step) * step
+	}
+
+	return math.Round(lot*100) / 100.0, spec
 }
 
 func getSymbolDisplay(sym string) (string, string) {
@@ -240,7 +244,7 @@ func makeILA2RadarBox(statusTitle, cycleDesc, dolStr, invStr string) string {
 		padRight(invStr, 28))
 }
 
-func makeILA2OrderBox(brokerName, tfStr, ticket, entry, sl, tp, rr, riskLot string) string {
+func makeILA2OrderBox(brokerName, tfStr, ticket, entry, sl, tp, rr, specDesc, riskLot string) string {
 	return fmt.Sprintf("```text\n"+
 		"┌──────────────┬──────────────────────────────┐\n"+
 		"│ Broker/Akun  │ %s │\n"+
@@ -251,6 +255,7 @@ func makeILA2OrderBox(brokerName, tfStr, ticket, entry, sl, tp, rr, riskLot stri
 		"│ Stop Loss    │ %s │\n"+
 		"│ Take Profit  │ %s │\n"+
 		"│ Risk / Reward│ %s │\n"+
+		"│ Spesifikasi  │ %s │\n"+
 		"│ Risiko & Lot │ %s │\n"+
 		"└──────────────┴──────────────────────────────┘\n```",
 		padRight(brokerName, 28),
@@ -260,6 +265,7 @@ func makeILA2OrderBox(brokerName, tfStr, ticket, entry, sl, tp, rr, riskLot stri
 		padRight(sl, 28),
 		padRight(tp, 28),
 		padRight(rr, 28),
+		padRight(specDesc, 28),
 		padRight(riskLot, 28))
 }
 
@@ -560,7 +566,20 @@ func main() {
 						equity = acc.Balance
 					}
 					riskDollars := equity * (riskPercent / 100.0)
-					lot := calcLot(sym, entryPrice, sl, riskDollars)
+					lot, spec := calcLot(ctx, tradeBroker, sym, entryPrice, sl, riskDollars)
+
+					specDesc := "$10.00/pip (Std Lot)"
+					if spec != nil {
+						if strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD") {
+							specDesc = fmt.Sprintf("$%.2f/pip ($100/pt)", spec.PointValue*0.10)
+						} else if strings.Contains(sym, "NAS") || strings.Contains(sym, "TEC") || strings.Contains(sym, "US100") || strings.Contains(sym, "US500") || strings.Contains(sym, "US30") {
+							specDesc = fmt.Sprintf("$%.2f / poin index", spec.PointValue)
+						} else {
+							specDesc = fmt.Sprintf("$%.2f/pip (Std Lot)", spec.PointValue*0.00010)
+						}
+					}
+					actualLoss := lot * math.Abs(entryPrice-sl) * spec.PointValue
+					riskLotStr := fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", (actualLoss/equity)*100.0, actualLoss, lot)
 
 					setupID := fmt.Sprintf("ILA-%s-%s-%s-%s", sym, ep.HTF, ep.LTF, time.Now().Format("200601021504"))
 
@@ -572,7 +591,8 @@ func main() {
 								"ENTRY MANUAL (LOCK)",
 								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
 								fmt.Sprintf("1:%.2f", setup.RiskReward),
-								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+								specDesc,
+								riskLotStr,
 							)
 							actionPlan := getILA2ActionPlan("DAILY_TRADE_LOCK", ep.HTF, ep.LTF, setup.Bias)
 							msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
@@ -606,7 +626,8 @@ func main() {
 								"ENTRY MANUAL (HOLD)",
 								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
 								fmt.Sprintf("1:%.2f", setup.RiskReward),
-								fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+								specDesc,
+								riskLotStr,
 							)
 							actionPlan := getILA2ActionPlan("OPEN_POS_HOLD", ep.HTF, ep.LTF, setup.Bias)
 							msg := fmt.Sprintf("⏳ **[SETUP ILA VALID - ENTRY MANUAL] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
@@ -635,7 +656,8 @@ func main() {
 							"MODE PANTAU",
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							fmt.Sprintf("%.2f%% ($%.2f)", riskPercent, riskDollars),
+							specDesc,
+							riskLotStr,
 						)
 						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
 						msg := fmt.Sprintf("🎯 **[SETUP ILA VALID - MODE PANTAU] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+
@@ -693,7 +715,8 @@ func main() {
 							"#"+orderRes.TicketNumber,
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", riskPercent, riskDollars, lot),
+							specDesc,
+							riskLotStr,
 						)
 						actionPlan := getILA2ActionPlan("READY_TO_ENTRY", ep.HTF, ep.LTF, setup.Bias)
 						entryAlert := fmt.Sprintf("🚀 **[ORDER REAL ILA 2.0] %s %s • %s**\n`Timeframe: %s ➡️ %s`\n\n"+

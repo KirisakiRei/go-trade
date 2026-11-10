@@ -478,7 +478,11 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		equity = 100000.0
 	}
 
-	riskRes, err := risk.CalculateLot(equity, req.RiskRatio, entryPrice, sl, req.MinRR, tp, req.Symbol)
+	spec, _ := s.broker.GetSymbolSpec(ctx, req.Symbol)
+	if spec == nil {
+		spec = broker.FallbackSymbolSpec(req.Symbol)
+	}
+	riskRes, err := risk.CalculateLotWithSpec(equity, req.RiskRatio, entryPrice, sl, req.MinRR, tp, *spec)
 	if err != nil {
 		result.Executed = false
 		result.RejectionReason = fmt.Sprintf("Kalkulasi risiko gagal: %v", err)

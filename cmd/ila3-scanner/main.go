@@ -170,38 +170,48 @@ func formatPrice(symbol string, val float64) string {
 	return fmt.Sprintf("%.5f", val)
 }
 
-func calcLot(symbol string, entry, sl, riskDollars float64) float64 {
+func calcLot(ctx context.Context, b broker.Broker, symbol string, entry, sl, riskDollars float64) (float64, *broker.SymbolSpec) {
+	spec, err := b.GetSymbolSpec(ctx, symbol)
+	if err != nil || spec == nil || spec.PointValue <= 0 {
+		spec = broker.FallbackSymbolSpec(symbol)
+	}
+
 	dist := math.Abs(entry - sl)
 	if dist <= 0.000001 || riskDollars <= 0 {
-		return 0.01
+		return spec.VolumeMin, spec
 	}
 
-	upper := strings.ToUpper(symbol)
-	var lot float64
-	if strings.Contains(upper, "XAU") || strings.Contains(upper, "GOLD") {
-		lot = riskDollars / (dist * 100.0)
-	} else if strings.Contains(upper, "NAS") || strings.Contains(upper, "TEC") || strings.Contains(upper, "US100") {
-		lot = riskDollars / dist
-		lot = math.Floor(lot*10) / 10.0
-		if lot < 0.10 {
-			lot = 0.10
-		}
-	} else {
-		pips := dist / 0.00010
-		if pips <= 0.01 {
-			return 0.01
-		}
-		lot = riskDollars / (pips * 10.0)
+	dollarRiskPerLot := dist * spec.PointValue
+	rawLot := (riskDollars / dollarRiskPerLot) + 1e-8
+
+	step := spec.VolumeStep
+	if step <= 0 {
+		step = 0.01
+	}
+	lot := math.Floor(rawLot/step) * step
+
+	minLot := spec.VolumeMin
+	if minLot <= 0 {
+		minLot = 0.01
+	}
+	if lot < minLot {
+		lot = minLot
 	}
 
-	lot = math.Round(lot*100) / 100.0
-	if lot < 0.01 {
-		lot = 0.01
+	maxLot := spec.VolumeMax
+	if maxLot <= 0 {
+		maxLot = 20.0
 	}
-	if lot > 20.0 {
-		lot = 20.0
+	if lot > maxLot {
+		lot = maxLot
 	}
-	return lot
+
+	// Max risk assertion gate: if lot * dollarRiskPerLot exceeds budget by > 10%, clamp down
+	if lot > minLot && (lot*dollarRiskPerLot) > (riskDollars*1.10) {
+		lot = math.Floor((riskDollars/dollarRiskPerLot)/step) * step
+	}
+
+	return math.Round(lot*100) / 100.0, spec
 }
 
 func getILA3ActionPlan(state sequence.SequenceState, htf, mtf, ltf, bias string) string {
@@ -241,7 +251,7 @@ func makeILA3RadarBox(stateStr, quarterStr, dolStr, invStr string) string {
 		padRight(invStr, 28))
 }
 
-func makeILA3OrderBox(brokerName, setupMode, ticket, entry, sl, tp1, tpExt, rr, riskLot string) string {
+func makeILA3OrderBox(brokerName, setupMode, ticket, entry, sl, tp1, tpExt, rr, specDesc, riskLot string) string {
 	return fmt.Sprintf("```text\n"+
 		"┌──────────────┬──────────────────────────────┐\n"+
 		"│ Broker/Akun  │ %s │\n"+
@@ -253,6 +263,7 @@ func makeILA3OrderBox(brokerName, setupMode, ticket, entry, sl, tp1, tpExt, rr, 
 		"│ Take Profit 1│ %s │\n"+
 		"│ Extended DOL │ %s │\n"+
 		"│ Risk / Reward│ %s │\n"+
+		"│ Spesifikasi  │ %s │\n"+
 		"│ Risiko & Lot │ %s │\n"+
 		"└──────────────┴──────────────────────────────┘\n```",
 		padRight(brokerName, 28),
@@ -263,6 +274,7 @@ func makeILA3OrderBox(brokerName, setupMode, ticket, entry, sl, tp1, tpExt, rr, 
 		padRight(tp1, 28),
 		padRight(tpExt, 28),
 		padRight(rr, 28),
+		padRight(specDesc, 28),
 		padRight(riskLot, 28))
 }
 
@@ -469,6 +481,23 @@ func main() {
 				db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN'", sym).Count(&countOpen)
 
 				if countOpen == 0 && cTraderBroker != nil && prevState.LastState != "ENTRY" {
+					brokerCtx, brokerCancel := context.WithTimeout(context.Background(), 20*time.Second)
+					acc, accErr := cTraderBroker.GetAccountInfo(brokerCtx)
+
+					var equity float64
+					if acc != nil {
+						equity = acc.Equity
+						if equity <= 0 {
+							equity = acc.Balance
+						}
+					}
+					if equity <= 0 {
+						equity = 98500.0 // Default display fallback
+					}
+					riskDollars := equity * 0.01
+
+					lot, spec := calcLot(brokerCtx, cTraderBroker, sym, setup.EntryPrice, setup.StopLoss, riskDollars)
+
 					dailyCtx, dailyCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					dailyStatus, _ := positionRepo.GetDailyTradeStatusWIB(dailyCtx, time.Now())
 					dailyCancel()
@@ -481,6 +510,19 @@ func main() {
 					mtfDesc := fmt.Sprintf("Dealing Range %s aktif. SSMT Correlation: %s.", ps.MTF, ssmtText)
 					ltfDesc := fmt.Sprintf("Sniper Mode lilin %s aktif. Trigger CISD terkonfirmasi by body.", ps.LTF)
 
+					specDesc := "$10.00/pip (Std Lot)"
+					if spec != nil {
+						if strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD") {
+							specDesc = fmt.Sprintf("$%.2f/pip ($100/pt)", spec.PointValue*0.10)
+						} else if strings.Contains(sym, "NAS") || strings.Contains(sym, "TEC") || strings.Contains(sym, "US100") || strings.Contains(sym, "US500") || strings.Contains(sym, "US30") {
+							specDesc = fmt.Sprintf("$%.2f / poin index", spec.PointValue)
+						} else {
+							specDesc = fmt.Sprintf("$%.2f/pip (Std Lot)", spec.PointValue*0.00010)
+						}
+					}
+					actualLoss := lot * math.Abs(setup.EntryPrice-setup.StopLoss) * spec.PointValue
+					riskLotStr := fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", (actualLoss/equity)*100.0, actualLoss, lot)
+
 					if dailyStatus != nil && !dailyStatus.CanTrade {
 						lockKey := sym + "-LOCK"
 						if prevState.LastState != lockKey {
@@ -492,7 +534,8 @@ func main() {
 								formatPrice(sym, setup.TakeProfit),
 								"HTF Macro ERL",
 								fmt.Sprintf("1:%.2f", setup.RiskReward),
-								"1.00% Live Equity",
+								specDesc,
+								riskLotStr,
 							)
 							actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
 							msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - ENTRY MANUAL] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n"+
@@ -511,6 +554,7 @@ func main() {
 							prevState.LastState = lockKey
 							state.Pairs[key] = prevState
 						}
+						brokerCancel()
 						continue
 					}
 
@@ -523,7 +567,8 @@ func main() {
 							formatPrice(sym, setup.TakeProfit),
 							"HTF Macro ERL",
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							"1.00% Live Equity",
+							specDesc,
+							riskLotStr,
 						)
 						actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
 						msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - MODE PANTAU] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n"+
@@ -540,25 +585,15 @@ func main() {
 						messages = append(messages, msg)
 						prevState.LastState = "ENTRY"
 						state.Pairs[key] = prevState
+						brokerCancel()
 						continue
 					}
 
-					brokerCtx, brokerCancel := context.WithTimeout(context.Background(), 25*time.Second)
-					acc, accErr := cTraderBroker.GetAccountInfo(brokerCtx)
-					var equity float64
-					if acc != nil {
-						equity = acc.Equity
-						if equity <= 0 {
-							equity = acc.Balance
-						}
-					}
 					if accErr != nil || equity <= 0 {
 						brokerCancel()
 						messages = append(messages, fmt.Sprintf("⚠️ **[ILA 3.0] Eksekusi Dibatalkan — %s %s**\nGagal membaca ekuitas akun cTrader. Entry ditolak demi keamanan margin.\n*Error:* `%v`", sEmoji, sName, accErr))
 						continue
 					}
-					riskDollars := equity * 0.01
-					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
 
 					setupID := fmt.Sprintf("ILA3-%s-%s-%s", sym, ps.ModeName, time.Now().Format("200601021504"))
 					orderRes, err := cTraderBroker.ExecuteOrder(brokerCtx, broker.OrderRequest{
@@ -601,6 +636,9 @@ func main() {
 							extDOLStr = formatPrice(sym, setup.NestedExecution.HTFTargetPrice)
 						}
 
+						actualLoss = lot * math.Abs(setup.EntryPrice-setup.StopLoss) * spec.PointValue
+						riskLotStr = fmt.Sprintf("%.2f%% ($%.2f) | %.2f Lot", (actualLoss/equity)*100.0, actualLoss, lot)
+
 						table := makeILA3OrderBox(
 							"IC Markets cTrader (#10131354)",
 							fmt.Sprintf("%s (%s)", setup.SetupType, ps.ModeName),
@@ -609,7 +647,8 @@ func main() {
 							formatPrice(sym, setup.TakeProfit),
 							extDOLStr,
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							fmt.Sprintf("1.00%% ($%.2f) | %.2f Lot", riskDollars, lot),
+							specDesc,
+							riskLotStr,
 						)
 
 						stdevText := ""
