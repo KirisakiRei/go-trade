@@ -242,6 +242,20 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] RISK MANAGEMENT — Penyesuaian Risiko Menjadi 1.0% Live Equity untuk ILA 2.0 & ILA 3.0
+- **Pelaku:** Hermes
+- **Tipe:** RISK MANAGEMENT / KONFIGURASI
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - Menyesuaikan parameter risiko per trade dari **0.5%** menjadi tepat **1.0% dari live equity** sesuai instruksi human untuk kedua engine:
+    - **ILA 2.0 (`cmd/scanner/main.go` & `internal/service/execution_service.go`):** `DefaultRiskPercent = 1.00`, lot sizing Match-Trader (#1089632) menggunakan 1.0% live equity ($100 per trade pada equity $10k).
+    - **ILA 3.0 (`cmd/ila3-scanner/main.go`):** Auto-eksekusi cTrader (#10131354) menggunakan `riskDollars = equity * 0.01` (1.0% live equity, ~$985 per trade pada equity $98.5k).
+    - **Core Risk Package (`pkg/risk/calculator.go` & `pkg/broker/multi_broker.go`):** Default fallback diselaraskan ke 1.0% live equity. Unit test di `pkg/risk/calculator_test.go` diperbarui ke 1.0% (PASS 100%).
+    - **Dokumentasi (`docs/04_RISK_MANAGEMENT_AND_POLICIES.md`):** Diselaraskan ke Dynamic 1.0% Live Equity Lot Sizing & State Machine kuota harian WIB (Max 2 Trades, 1 Win Stop, Max Drawdown harian -2.0%).
+  - Seluruh binary di-recompile (`ila-scanner`, `ila3-scanner`, `ila-server`, `ila3-server`) dan daemons di-restart sehat di port 8080 & 8082.
+
+---
+
 ### [2026-11-10] FITUR — Format Alert Visual ASCII Box, Terminologi Trader Institusional, dan Candle-Close Adaptive Scheduling di Branch hermes
 - **Pelaku:** Hermes
 - **Tipe:** FITUR / PERBAIKAN

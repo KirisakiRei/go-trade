@@ -29,7 +29,7 @@ import (
 
 const (
 	AccountSize        = 10000.0
-	DefaultRiskPercent = 0.50
+	DefaultRiskPercent = 1.00
 	MinRR              = 2.0
 	MaxRR              = 2.3
 )

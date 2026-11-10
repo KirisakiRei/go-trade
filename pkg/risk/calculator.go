@@ -41,7 +41,7 @@ func ValidateRR(entry, sl, tp float64, minRR float64) (float64, bool) {
 	return math.Round(rr*100) / 100, rr >= minRR
 }
 
-// CalculateLot computes position size based on exact equity, risk percentage (e.g. 0.5%), and instrument pip value.
+// CalculateLot computes position size based on exact equity, risk percentage (e.g. 1.0%), and instrument pip value.
 // Symbol determines contract specs:
 // - Gold (XAUUSD): 1 Lot = 100 oz. 1 pip = $0.10 price move ($10/pip/lot). $1.00 move = 10 pips ($100/lot).
 // - Forex Standard (EURUSD, GBPUSD): 1 Lot = 100,000 units. 1 pip = 0.00010 ($10/pip/lot).
@@ -53,7 +53,7 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 		return nil, ErrInvalidStopLoss
 	}
 	if riskPercent <= 0 {
-		riskPercent = 0.5 // Default 0.5% (konservatif & aman prop firm)
+		riskPercent = 1.0 // Default 1.0% per user instruction
 	}
 	if minRR <= 0 {
 		minRR = 2.0 // Default 1:2

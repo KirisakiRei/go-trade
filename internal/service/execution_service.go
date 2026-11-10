@@ -388,7 +388,7 @@ func (s *executionService) ConfirmSignal(ctx context.Context, req dto.ConfirmSig
 
 func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.ILA2ExecuteRequest) (*dto.TradeExecutionResult, error) {
 	if req.RiskRatio <= 0 {
-		req.RiskRatio = 0.5 // Default 0.5% (konservatif & aman prop firm)
+		req.RiskRatio = 1.0 // Default 1.0% live equity
 	}
 	if req.MinRR <= 0 {
 		req.MinRR = 2.0 // 1:2 R:R
@@ -407,7 +407,7 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		ExecutedAt: time.Now(),
 	}
 
-	// 1. Trade Management Harian (WIB / Jam Jakarta): 1 Win = Stop, Max 2 Trades, 0.5% Risk.
+	// 1. Trade Management Harian (WIB / Jam Jakarta): 1 Win = Stop, Max 2 Trades, 1.0% Risk.
 	// `--force` tetap bisa bypass untuk override manual.
 	if !req.Force {
 		dailyStatus, err := s.positionRepo.GetDailyTradeStatusWIB(ctx, time.Now())

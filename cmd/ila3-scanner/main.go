@@ -467,7 +467,7 @@ func main() {
 								formatPrice(sym, setup.TakeProfit),
 								"HTF Macro ERL",
 								fmt.Sprintf("1:%.2f", setup.RiskReward),
-								"0.50% Live Equity",
+								"1.00% Live Equity",
 							)
 							actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
 							msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - ENTRY MANUAL] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n%s\n\n🛑 **AUTO-EKSEKUSI DITAHAN:**\n• %s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
@@ -488,7 +488,7 @@ func main() {
 							formatPrice(sym, setup.TakeProfit),
 							"HTF Macro ERL",
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							"0.50% Live Equity",
+							"1.00% Live Equity",
 						)
 						actionPlan := getILA3ActionPlan(setup.State, ps.HTF, ps.MTF, ps.LTF, setup.Bias)
 						msg := fmt.Sprintf("🎯 **[SETUP ILA 3.0 VALID - MODE PANTAU] %s %s • %s**\n`Mode: %s (%s ➡️ %s ➡️ %s)`\n\n%s\n\n👉 **ACTION PLAN & TRADING STEPS:**\n• %s",
@@ -511,7 +511,7 @@ func main() {
 						messages = append(messages, fmt.Sprintf("⚠️ **[ILA 3.0] Eksekusi Dibatalkan — %s %s**\nGagal membaca ekuitas akun cTrader. Entry ditolak demi keamanan margin.\n*Error:* `%v`", sEmoji, sName, accErr))
 						continue
 					}
-					riskDollars := equity * 0.005
+					riskDollars := equity * 0.01
 					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
 
 					setupID := fmt.Sprintf("ILA3-%s-%s-%s", sym, ps.ModeName, time.Now().Format("200601021504"))
@@ -562,7 +562,7 @@ func main() {
 							formatPrice(sym, setup.TakeProfit),
 							extDOLStr,
 							fmt.Sprintf("1:%.2f", setup.RiskReward),
-							fmt.Sprintf("0.50%% ($%.2f) | %.2f Lot", riskDollars, lot),
+							fmt.Sprintf("1.00%% ($%.2f) | %.2f Lot", riskDollars, lot),
 						)
 
 						stdevText := ""

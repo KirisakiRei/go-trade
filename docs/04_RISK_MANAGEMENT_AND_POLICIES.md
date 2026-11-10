@@ -1,17 +1,17 @@
 # 04. KEBIJAKAN MANAJEMEN RISIKO & PROTOKOL EKSEKUSI (POLICIES)
 
-## 1. Dynamic 0.5% Live Equity Lot Sizing
+## 1. Dynamic 1.0% Live Equity Lot Sizing
 
-Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **0.5% dari live equity** akun broker saat sinyal tervalidasi:
+Ukuran lot tidak pernah ditebak atau menggunakan angka tetap, melainkan dihitung secara matematis tepat **1.0% dari live equity** akun broker saat sinyal tervalidasi:
 
-$$\text{Risk Dollars} = \text{Live Equity} \times 0.005$$
+$$\text{Risk Dollars} = \text{Live Equity} \times 0.01$$
 
 $$\text{Lot Size} = \frac{\text{Risk Dollars}}{\text{Jarak SL} \times \text{Contract Size}}$$
 
-### Keunggulan Parameter 0.5% untuk Prop Firm:
-* Akun $10.000 (Match-Trader): Risiko per trade = **$50.00**.
-* Akun $100.000 (cTrader): Risiko per trade = **$500.00**.
-* Maksimal drawdown harian jika 2x SL berturut-turut terkunci rapat di **-1.0%** (jauh di bawah batas Max Daily Loss 5.0% prop firm).
+### Parameter 1.0% untuk ILA 2.0 & ILA 3.0:
+* Akun $10.000 (Match-Trader): Risiko per trade = **$100.00**.
+* Akun $100.000 (cTrader): Risiko per trade = **$1,000.00**.
+* Maksimal drawdown harian jika 2x SL berturut-turut terkunci rapat di **-2.0%** (tetap aman di bawah batas Max Daily Loss 5.0% prop firm).
 
 ### Parameter Spesifikasi Kontrak Simbol:
 1. **XAU/USD (Gold):**
@@ -51,12 +51,12 @@ Untuk menegakkan kedisiplinan dan menjaga konsistensi prop firm:
 * **Zona Waktu:** Dihitung berdasarkan kalender **WIB (Asia/Jakarta / UTC+7)** dari 00:00:00 hingga 23:59:59 WIB.
 * **Maksimal Trade:** **2 kali per hari**.
 * **Aturan Keputusan State Machine:**
-  1. **Trade 1 WIN (+2.0R s/d +2.3R = +1.0% s/d +1.15%):**
+  1. **Trade 1 WIN (+2.0R s/d +2.3R = +2.0% s/d +2.3%):**
      * ➡️ **SELESAI (STOP TRADING)** untuk hari itu. Amankan profit harian!
-  2. **Trade 1 LOSS (-1.0R = -0.5%):**
+  2. **Trade 1 LOSS (-1.0R = -1.0%):**
      * ➡️ Sistem membuka kesempatan untuk **Trade ke-2** di hari yang sama.
-     * Jika Trade 2 **WIN (+2.0R = +1.0%)** ➡️ Hari berakhir dengan net profit +0.5%. Eksekusi ditutup.
-     * Jika Trade 2 **LOSS (-1.0R = -0.5%)** ➡️ Kuota 2 trade habis (**STOP TRADING**). Hari berakhir dengan risiko terkontrol maksimal -1.0%.
+     * Jika Trade 2 **WIN (+2.0R = +2.0%)** ➡️ Hari berakhir dengan net profit +1.0%. Eksekusi ditutup.
+     * Jika Trade 2 **LOSS (-1.0R = -1.0%)** ➡️ Kuota 2 trade habis (**STOP TRADING**). Hari berakhir dengan risiko terkontrol maksimal -2.0%.
 * **Transparansi Notifikasi:**
   * Scanner Telegram **tetap memantau pasar** dan mengirim update radar ILA, tetapi auto-eksekusi order dikunci dengan keterangan transparan:
     * `🎯 [EKSEKUSI DIKUNCI] Target harian tercapai (1x WIN). Profit diamankan!`
