@@ -123,45 +123,6 @@ func TestFakeSweepCandle3Rejected(t *testing.T) {
 	}
 }
 
-// TestExternalToInternalSweep memvalidasi kasus nyata USTEC H4:
-// Candle acuan (cPrev) berada tipis di atas/luar Bullish FVG (misal FVG Top=27786.75, cPrev Low=27829.00),
-// lalu candle sweep datang dari luar, menyapu Low cPrev (27766.60 < 27829.00) dan menusuk masuk ke FVG.
-// Pola ini WAJIB sah diakui sebagai HTF Sweep (External-to-Internal Sweep).
-func TestExternalToInternalSweep(t *testing.T) {
-	eval := NewEvaluator()
-	now := time.Now()
-
-	htfCandles := []indicators.Candle{
-		// C1, C2, C3 membentuk Bullish FVG: 27275.40 - 27786.75
-		{Timestamp: now.Add(-20 * time.Hour), Open: 27032.50, High: 27275.40, Low: 27004.90, Close: 27214.00, IsClosed: true}, // C1
-		{Timestamp: now.Add(-16 * time.Hour), Open: 27214.00, High: 27908.05, Low: 27190.80, Close: 27835.05, IsClosed: true}, // C2
-		{Timestamp: now.Add(-12 * time.Hour), Open: 27835.05, High: 28023.15, Low: 27786.75, Close: 27969.10, IsClosed: true}, // C3
-
-		// Candle A (cPrev): parkir tipis di atas FVG (Low=27829.00 > Top FVG 27786.75)
-		{Timestamp: now.Add(-8 * time.Hour), Open: 27969.10, High: 28002.00, Low: 27829.00, Close: 27905.60, IsClosed: true},
-
-		// Candle B (Sweep Candle): menyapu cPrev (Low 27766.60 < 27829.00) dan menusuk masuk ke FVG (27766.60 <= 27786.75)
-		{Timestamp: now.Add(-4 * time.Hour), Open: 27905.60, High: 27946.10, Low: 27766.60, Close: 27929.60, IsClosed: true},
-
-		// Candle C: Candle 5 (running)
-		{Timestamp: now.Add(0), Open: 27929.60, High: 27933.50, Low: 27899.10, Close: 27920.00, IsClosed: false},
-	}
-
-	sweep := eval.DetectHTFIlaSweep(htfCandles)
-	if sweep == nil || !sweep.Detected {
-		t.Fatalf("expected External-to-Internal Sweep to be detected, got nil or not detected")
-	}
-	if sweep.Direction != "BULLISH" {
-		t.Errorf("expected BULLISH direction, got %s", sweep.Direction)
-	}
-	if sweep.StopLoss != 27766.60 {
-		t.Errorf("expected StopLoss=27766.60, got %.2f", sweep.StopLoss)
-	}
-	if sweep.TargetDOL != 28023.15 {
-		t.Errorf("expected TargetDOL=28023.15, got %.2f", sweep.TargetDOL)
-	}
-}
-
 func TestILASetupExpiredWhenCandle5Closed(t *testing.T) {
 	eval := NewEvaluator()
 	now := time.Now()

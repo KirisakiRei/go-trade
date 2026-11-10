@@ -170,11 +170,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 
 		// 1. BEARISH ILA SWEEP:
 		// - latestFVG is Bearish
-		// - cPrev wick is below FVG top: cPrev.High < latestFVG.Top
+		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top
 		// - ck enters FVG: ck.High >= latestFVG.Bottom
-		// - ck sweeps previous ADJACENT wick: ck.High > cPrev.High
+		// - ck sweeps previous ADJACENT wick inside FVG: ck.High > cPrev.High
 		// - ck does NOT close above FVG top (displacement holds): ck.Close <= latestFVG.Top
-		if latestFVG.Type == FVGBearish && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top {
+		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top {
 			ssl := latestFVG.Bottom
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].Low < ssl {
@@ -232,11 +232,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 
 		// 2. BULLISH ILA SWEEP:
 		// - latestFVG is Bullish
-		// - cPrev wick is above FVG bottom: cPrev.Low > latestFVG.Bottom
+		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom
 		// - ck enters FVG: ck.Low <= latestFVG.Top
-		// - ck sweeps previous wick low: ck.Low < cPrev.Low
+		// - ck sweeps previous wick low inside FVG: ck.Low < cPrev.Low
 		// - ck does NOT close below FVG bottom: ck.Close >= latestFVG.Bottom
-		if latestFVG.Type == FVGBullish && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom {
+		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom {
 			bsl := latestFVG.Top
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].High > bsl {
