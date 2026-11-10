@@ -242,6 +242,27 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-10] FITUR — Format Alert Visual ASCII Box, Terminologi Trader Institusional, dan Candle-Close Adaptive Scheduling di Branch hermes
+- **Pelaku:** Hermes
+- **Tipe:** FITUR / PERBAIKAN
+- **Status:** 🟢 SELESAI
+- **Ringkasan:**
+  - **Terminologi Trading Institusional & Action Plan:**
+    - Memperbarui teks bagian "Action Plan & Trading Steps" di `cmd/scanner/main.go` (ILA 2.0) dan `cmd/ila3-scanner/main.go` (ILA 3.0) menggunakan bahasa trading analitis & profesional (Liquidity Hunting, Order Flow Shift, Displacement Verification, Rejection Wick, Change in State of Delivery / CISD by body, Dealing Range Reversal, Standard Deviation Extension, Session Expiry).
+  - **Tabel Box ASCII Monospaced:**
+    - Membuat generator tabel box ASCII monospaced (` ```text `) untuk radar pemantauan dan order eksekusi yang rapi dan presisi di layar Telegram mobile tanpa meluber.
+  - **Candle-Close Adaptive Scheduling:**
+    - Menghapus pemindaian buta 15-menit; scheduler sekarang beradaptasi mengikuti penutupan lilin aktif:
+      - ILA 2.0: Mengikuti penutupan lilin HTF (W/D1/H4/H1) saat menunggu sweep, lalu otomatis beralih mengikuti penutupan lilin LTF (H4/H1/M15/M5) saat memasuki jendela Candle 5 (menunggu CISD) dengan toleransi buffer +3 detik.
+      - ILA 3.0: Mengikuti penutupan lilin HTF pada Fase 1, MTF pada Fase 2, dan LTF pada Fase 3.
+  - **Pengiriman Alert Per-Bubble Mandiri:**
+    - Menyelaraskan runner cronjob (`scripts/scan_propfirm.py` & `scripts/scan_ila3.py`) agar mendistribusikan setiap slot timeframe/pasangan instrumen ke pesan bubble terpisah via `hermes send`.
+  - **Verifikasi & Build:**
+    - Seluruh unit test PASS 100%. Kompilasi ulang `bin/ila-scanner` dan `bin/ila3-scanner`.
+    - Server `ila-server` (port 8080) dan `ila3-server` (port 8082) aktif dan sehat.
+
+---
+
 ### [2026-11-10] SYNC BRANCH HERMES — Porting Perbaikan Aturan Trading (ILA 2.0 & ILA 3.0) dari develop ke branch hermes
 - **Pelaku:** Hermes
 - **Tipe:** FITUR / PERBAIKAN
