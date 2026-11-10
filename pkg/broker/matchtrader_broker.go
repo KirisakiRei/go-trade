@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,8 @@ type MatchTraderBroker struct {
 	baseURL    string
 	httpClient *http.Client
 	login      string
+	mu         sync.RWMutex
+	specs      map[string]*SymbolSpec
 }
 
 func NewMatchTraderBroker(token string) *MatchTraderBroker {
@@ -32,6 +35,7 @@ func NewMatchTraderBroker(token string) *MatchTraderBroker {
 			Timeout: 10 * time.Second,
 		},
 		login: "1089632",
+		specs: make(map[string]*SymbolSpec),
 	}
 }
 
@@ -79,6 +83,110 @@ func (b *MatchTraderBroker) GetAccountInfo(ctx context.Context) (*AccountInfo, e
 		MarginUsed:    sum.Margin,
 		FreeMargin:    sum.FreeFunds,
 	}, nil
+}
+
+func (b *MatchTraderBroker) fetchSymbolsIfNeeded(ctx context.Context) error {
+	b.mu.RLock()
+	if len(b.specs) > 0 {
+		b.mu.RUnlock()
+		return nil
+	}
+	b.mu.RUnlock()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if len(b.specs) > 0 {
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", b.baseURL+"/symbols", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Match-Trader symbols error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Symbols []struct {
+			Symbol         string  `json:"symbol"`
+			Type           string  `json:"type"`
+			Multiplier     float64 `json:"multiplier"`
+			ContractSize   float64 `json:"contractSize"`
+			VolumeStep     float64 `json:"volumeStep"`
+			VolumeMin      float64 `json:"volumeMin"`
+			VolumeMax      float64 `json:"volumeMax"`
+			PricePrecision int     `json:"pricePrecision"`
+		} `json:"symbols"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return err
+	}
+
+	specs := make(map[string]*SymbolSpec)
+	for _, s := range data.Symbols {
+		cs := s.ContractSize
+		if cs <= 0 {
+			cs = 1.0
+		}
+		pointVal := 1.0
+		if s.Multiplier > 0 {
+			pointVal = s.Multiplier * cs
+		} else {
+			pointVal = cs
+		}
+
+		step := s.VolumeStep
+		if step <= 0 {
+			step = 0.01
+		}
+		vmin := s.VolumeMin
+		if vmin <= 0 {
+			vmin = 0.01
+		}
+		vmax := s.VolumeMax
+		if vmax <= 0 {
+			vmax = 100.0
+		}
+
+		spec := &SymbolSpec{
+			Symbol:         s.Symbol,
+			PointValue:     pointVal,
+			VolumeMin:      vmin,
+			VolumeStep:     step,
+			VolumeMax:      vmax,
+			PricePrecision: s.PricePrecision,
+		}
+		specs[s.Symbol] = spec
+	}
+	b.specs = specs
+	return nil
+}
+
+func (b *MatchTraderBroker) GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error) {
+	mtrSymbol := b.MapSymbol(symbol)
+	_ = b.fetchSymbolsIfNeeded(ctx)
+
+	b.mu.RLock()
+	spec, ok := b.specs[mtrSymbol]
+	b.mu.RUnlock()
+
+	if ok && spec != nil {
+		return spec, nil
+	}
+
+	return FallbackSymbolSpec(mtrSymbol), nil
 }
 
 func (b *MatchTraderBroker) MapSymbol(sym string) string {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"ila-engine/pkg/broker"
 )
 
 const (
@@ -41,19 +43,28 @@ func ValidateRR(entry, sl, tp float64, minRR float64) (float64, bool) {
 	return math.Round(rr*100) / 100, rr >= minRR
 }
 
-// CalculateLot computes position size based on exact equity, risk percentage (e.g. 0.5%), and instrument pip value.
-// Symbol determines contract specs:
-// - Gold (XAUUSD): 1 Lot = 100 oz. 1 pip = $0.10 price move ($10/pip/lot). $1.00 move = 10 pips ($100/lot).
-// - Forex Standard (EURUSD, GBPUSD): 1 Lot = 100,000 units. 1 pip = 0.00010 ($10/pip/lot).
+// CalculateLot computes position size based on fallback specs for symbol.
 func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol string) (*RiskResult, error) {
+	spec := broker.FallbackSymbolSpec(symbol)
+	return CalculateLotWithSpec(equity, riskPercent, entry, sl, minRR, tp, *spec)
+}
+
+// CalculateLotWithSpec computes position size dynamically using exact contract specifications from broker.
+// PointValue defines how many USD are won/lost per 1.00 full price move per 1.00 lot:
+// - Forex Standard: PointValue = 100,000 (1 pip 0.00010 = $10/lot)
+// - Gold Standard: PointValue = 100 (1 pip 0.10 = $10/lot, $1 move = $100/lot)
+// - Match-Trader US100: Multiplier 20 * ContractSize 1 -> PointValue = 20.0 ($20 per 1.00 index point/lot)
+// - cTrader USTEC: 1 CFD contract -> PointValue = 1.0 ($1 per 1.00 index point/lot)
+func CalculateLotWithSpec(equity, riskPercent, entry, sl, minRR, tp float64, spec broker.SymbolSpec) (*RiskResult, error) {
 	if equity <= 0 {
 		return nil, ErrZeroEquity
 	}
-	if math.Abs(entry-sl) <= 0.000001 {
+	priceDist := math.Abs(entry - sl)
+	if priceDist <= 0.000001 {
 		return nil, ErrInvalidStopLoss
 	}
 	if riskPercent <= 0 {
-		riskPercent = 0.5 // Default 0.5% (konservatif & aman prop firm)
+		riskPercent = 1.0 // Default 1.0% per user instruction
 	}
 	if minRR <= 0 {
 		minRR = 2.0 // Default 1:2
@@ -63,25 +74,33 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 		riskPercent = 2.0
 	}
 
-	sym := strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
+	sym := strings.ToUpper(strings.ReplaceAll(spec.Symbol, "/", ""))
 	isGold := strings.Contains(sym, "XAU") || strings.Contains(sym, "GOLD") || strings.Contains(sym, "PAXG")
 	isIndex := strings.Contains(sym, "NAS") || strings.Contains(sym, "TEC") || strings.Contains(sym, "US100") || strings.Contains(sym, "US30") || strings.Contains(sym, "US500") || strings.Contains(sym, "SPX") || strings.Contains(sym, "NDX")
 
-	riskAmount := equity * (riskPercent / 100.0)
-	priceDist := math.Abs(entry - sl)
-
 	var pipSize float64
-	var pipValuePerLot float64
-
 	if isGold {
-		pipSize = 0.10        // 1 pip Gold = 0.10 USD
-		pipValuePerLot = 10.0 // 1 standard lot (100 oz) * 0.10 = $10 per pip
+		pipSize = 0.10
 	} else if isIndex {
-		pipSize = 1.0        // 1 index point
-		pipValuePerLot = 1.0 // 1 index CFD contract = $1 per point
+		pipSize = 1.0
 	} else {
-		pipSize = 0.00010     // 1 pip Forex = 0.00010
-		pipValuePerLot = 10.0 // 1 standard lot (100,000) * 0.00010 = $10 per pip
+		pipSize = 0.00010
+	}
+
+	pointVal := spec.PointValue
+	if pointVal <= 0 {
+		if isGold {
+			pointVal = 100.0
+		} else if isIndex {
+			pointVal = 1.0
+		} else {
+			pointVal = 100000.0
+		}
+	}
+
+	pipValuePerLot := pointVal * pipSize
+	if pipValuePerLot <= 0 {
+		pipValuePerLot = 10.0
 	}
 
 	pips := priceDist / pipSize
@@ -89,40 +108,59 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 		pips = 1.0
 	}
 
-	// lot = riskAmount / (pips * pipValuePerLot)
-	rawLot := riskAmount / (pips * pipValuePerLot)
+	riskAmount := equity * (riskPercent / 100.0)
+	dollarLossPerLot := pips * pipValuePerLot
+	rawLot := (riskAmount / dollarLossPerLot) + 1e-8
 
-	minLot := 0.01
-	if isIndex {
-		minLot = 0.10 // USTEC minimum volume is 0.10 lot
+	step := spec.VolumeStep
+	if step <= 0 {
+		if isIndex {
+			step = 0.10
+		} else {
+			step = 0.01
+		}
 	}
 
-	// Clamp lot size between minLot and 20.0 lots (dynamic based on equity)
-	lot := math.Round(rawLot*100) / 100
-	if isIndex {
-		lot = math.Floor(rawLot*10) / 10.0 // cTrader volume step for USTEC is 0.10 lot
+	minLot := spec.VolumeMin
+	if minLot <= 0 {
+		if isIndex {
+			minLot = 0.10
+		} else {
+			minLot = 0.01
+		}
 	}
+
+	maxLot := spec.VolumeMax
+	if maxLot <= 0 {
+		maxLot = MaxLotSize
+	}
+
+	// Floor lot calculation to never overshoot risk
+	lot := math.Floor(rawLot/step) * step
 	if lot < minLot {
 		lot = minLot
 	}
-	if lot > MaxLotSize {
-		lot = MaxLotSize
+	if lot > maxLot {
+		lot = maxLot
 	}
+
+	// Max Risk Assertion Gate: If rounded lot overshoots risk budget by > 10%, clamp down by step
+	actualRiskAmount := lot * dollarLossPerLot
+	if lot > minLot && actualRiskAmount > (riskAmount*1.10) {
+		lot = math.Floor((riskAmount/dollarLossPerLot)/step) * step
+		actualRiskAmount = lot * dollarLossPerLot
+	}
+
+	actualRiskPercent := (actualRiskAmount / equity) * 100.0
+	passedRisk := actualRiskPercent <= (riskPercent * 1.05)
 
 	rr, passedRR := ValidateRR(entry, sl, tp, minRR)
 
-	// Risiko aktual setelah pembulatan lot (clamp ke minLot bisa menaikkan risiko).
-	actualRiskAmount := lot * pips * pipValuePerLot
-	actualRiskPercent := (actualRiskAmount / equity) * 100.0
-
-	riskTolerance := 1.05 // toleransi 5% untuk pembulatan lot broker
-	passedRisk := actualRiskPercent <= riskPercent*riskTolerance
-
 	res := &RiskResult{
-		LotSize:        lot,
-		RiskAmount:     math.Round(actualRiskAmount*100) / 100,
-		RiskPercentage: math.Round(actualRiskPercent*1000) / 1000,
-		DistancePips:   math.Round(pips*10) / 10,
+		LotSize:        math.Round(lot*100) / 100.0,
+		RiskAmount:     math.Round(actualRiskAmount*100) / 100.0,
+		RiskPercentage: math.Round(actualRiskPercent*1000) / 1000.0,
+		DistancePips:   math.Round(pips*10) / 10.0,
 		PipValue:       pipValuePerLot,
 		RiskReward:     rr,
 		PassedRR:       passedRR,
@@ -133,7 +171,7 @@ func CalculateLot(equity, riskPercent, entry, sl, minRR, tp float64, symbol stri
 	case !passedRR:
 		res.Reason = "R:R ratio below mandatory 1:2"
 	case !passedRisk:
-		res.Reason = fmt.Sprintf("Lot terpaksa dibulatkan ke bawah/atas sehingga risiko aktual (%.3f%%) melebihi target (%.3f%%)", actualRiskPercent, riskPercent)
+		res.Reason = fmt.Sprintf("Lot terpaksa dibulatkan sehingga risiko aktual (%.3f%%) melebihi target (%.3f%%)", actualRiskPercent, riskPercent)
 	default:
 		res.Reason = "Risk and R:R rules passed"
 	}
