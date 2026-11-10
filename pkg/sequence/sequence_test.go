@@ -145,3 +145,50 @@ func TestGoldSLFloorAndRRClamp(t *testing.T) {
 		t.Errorf("expected R:R within [2.5, 4.5], got %.2f", setup.RiskReward)
 	}
 }
+
+// TestEnforceLatestActiveFVGOnly memvalidasi bahwa ILA 3.0 strictly hanya menggunakan
+// FVG aktif terbaru dan dilarang melompat mundur ke FVG usang (mencegah bug USTEC).
+func TestEnforceLatestActiveFVGOnly(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// HTF dengan 2 FVG:
+	// 1. FVG Lama: Bearish FVG di 28000 - 28500 (C1 High=28500, C3 Low=28000)
+	// 2. FVG Baru: Bullish FVG di 27200 - 27600
+	htf := []indicators.Candle{
+		// Bearish FVG lama (index 0, 1, 2)
+		{Timestamp: now.Add(-100 * time.Hour), Open: 28600, High: 28700, Low: 28500, Close: 28550, IsClosed: true},
+		{Timestamp: now.Add(-96 * time.Hour), Open: 28500, High: 28520, Low: 27900, Close: 27950, IsClosed: true}, // displacement down
+		{Timestamp: now.Add(-92 * time.Hour), Open: 27950, High: 28000, Low: 27800, Close: 27850, IsClosed: true}, // Bearish FVG 28000 - 28500
+
+		// Lilin konsolidasi
+		{Timestamp: now.Add(-88 * time.Hour), Open: 27850, High: 27900, Low: 27700, Close: 27750, IsClosed: true},
+		{Timestamp: now.Add(-84 * time.Hour), Open: 27750, High: 27800, Low: 27100, Close: 27150, IsClosed: true},
+
+		// Bullish FVG terbaru (index 5, 6, 7)
+		{Timestamp: now.Add(-80 * time.Hour), Open: 27150, High: 27200, Low: 27100, Close: 27180, IsClosed: true},
+		{Timestamp: now.Add(-76 * time.Hour), Open: 27200, High: 27700, Low: 27180, Close: 27680, IsClosed: true}, // displacement up
+		{Timestamp: now.Add(-72 * time.Hour), Open: 27680, High: 27800, Low: 27600, Close: 27750, IsClosed: true}, // Bullish FVG 27200 - 27600
+
+		// Lilin terkini: harga di 28100 (berada di dalam range FVG Bearish lama 28000-28500, tapi DI LUAR FVG Bullish baru 27200-27600)
+		{Timestamp: now, Open: 27750, High: 28150, Low: 27700, Close: 28100, IsClosed: true},
+	}
+
+	mtf := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), High: 28100, Low: 27900, Close: 28000, IsClosed: true},
+		{Timestamp: now.Add(-16 * time.Hour), High: 28120, Low: 27950, Close: 28050, IsClosed: true},
+		{Timestamp: now, High: 28150, Low: 28000, Close: 28100, IsClosed: true},
+	}
+
+	ltf := []indicators.Candle{
+		{Timestamp: now.Add(-30 * time.Minute), Open: 28050, High: 28120, Low: 28040, Close: 28100, IsClosed: true},
+		{Timestamp: now, Open: 28100, High: 28150, Low: 28080, Close: 28120, IsClosed: true},
+	}
+
+	setup := eval.EvaluateSequence(htf, mtf, ltf, nil, "4H", "1H", "5m", "USTEC", "US500")
+
+	// Setup DILARANG mengambil bias BEARISH dari FVG lama!
+	if setup.Bias == "BEARISH" {
+		t.Fatalf("FAILED: Evaluator keliru melompat ke FVG Bearish lama padahal ada FVG Bullish aktif terbaru! Got bias: %s", setup.Bias)
+	}
+}

@@ -102,7 +102,6 @@ func (e *Evaluator) EvaluateSequence(
 
 	// 1. Detect HTF Key Levels
 	htfERLs := e.klDetector.FindERLs(htfCandles)
-	htfIRLs := e.klDetector.FindIRLs(htfCandles)
 
 	htfReached := false
 	latestHTF := htfCandles[len(htfCandles)-1]
@@ -123,19 +122,25 @@ func (e *Evaluator) EvaluateSequence(
 		}
 	}
 
-	// If no ERL interacted, check IRLs (FVG)
+	// If no ERL interacted, check ONLY the latest active IRL (FVG) - strictly matching ILA 2.0
 	if !htfReached {
-		for i := len(htfIRLs) - 1; i >= 0; i-- {
-			irl := &htfIRLs[i]
-			if !irl.FullyFilled && !irl.Invalidated {
-				if irl.Type == keylevels.TypeIRLBearish && latestHTF.High >= irl.Bottom {
-					htfReached = true
-					setup.Bias = "BEARISH"
-					break
-				} else if irl.Type == keylevels.TypeIRLBullish && latestHTF.Low <= irl.Top {
-					htfReached = true
-					setup.Bias = "BULLISH"
-					break
+		latestIRL := e.klDetector.GetLatestActiveIRL(htfCandles)
+		if latestIRL != nil {
+			if latestIRL.Type == keylevels.TypeIRLBearish && latestHTF.High >= latestIRL.Bottom && latestHTF.High <= latestIRL.Top {
+				htfReached = true
+				setup.Bias = "BEARISH"
+				setup.HTFStartLevel = &keylevels.ERL{
+					Type:        keylevels.TypeERLSwingHigh,
+					Price:       latestIRL.Top,
+					CandleIndex: latestIRL.CandleIndex,
+				}
+			} else if latestIRL.Type == keylevels.TypeIRLBullish && latestHTF.Low <= latestIRL.Top && latestHTF.Low >= latestIRL.Bottom {
+				htfReached = true
+				setup.Bias = "BULLISH"
+				setup.HTFStartLevel = &keylevels.ERL{
+					Type:        keylevels.TypeERLSwingLow,
+					Price:       latestIRL.Bottom,
+					CandleIndex: latestIRL.CandleIndex,
 				}
 			}
 		}
@@ -433,22 +438,24 @@ func (e *Evaluator) EvaluateSequence(
 	}
 
 	// 6. Check Entry 2 (Second Chance Retracement in MTF FVG)
-	mtfIRLs := e.klDetector.FindIRLs(mtfCandles)
+	latestMTFIRL := e.klDetector.GetLatestActiveIRL(mtfCandles)
 	var activeRetraceFVG *keylevels.IRL
-	for i := len(mtfIRLs) - 1; i >= 0; i-- {
-		fvg := &mtfIRLs[i]
-		if !fvg.FullyFilled && !fvg.Invalidated {
-			// Aturan Entry yang Dilarang (Section 10):
-			// FVG fresh di MTF yang masih berada di dalam / dekat area HTF key level hanya waypoint, bukan entry point!
+	if latestMTFIRL != nil {
+		aligned := (setup.Bias == "BULLISH" && latestMTFIRL.Type == keylevels.TypeIRLBullish) ||
+			(setup.Bias == "BEARISH" && latestMTFIRL.Type == keylevels.TypeIRLBearish)
+
+		if aligned {
+			isWaypoint := false
 			if setup.HTFStartLevel != nil {
 				htfP := setup.HTFStartLevel.Price
-				if htfP >= fvg.Bottom && htfP <= fvg.Top {
-					setup.WaypointFVG = fvg
-					continue // Lewati, jadikan waypoint only!
+				if htfP >= latestMTFIRL.Bottom && htfP <= latestMTFIRL.Top {
+					setup.WaypointFVG = latestMTFIRL
+					isWaypoint = true
 				}
 			}
-			activeRetraceFVG = fvg
-			break
+			if !isWaypoint {
+				activeRetraceFVG = latestMTFIRL
+			}
 		}
 	}
 
