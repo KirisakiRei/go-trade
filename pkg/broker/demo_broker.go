@@ -49,6 +49,10 @@ func (b *DemoBroker) GetAccountInfo(ctx context.Context) (*AccountInfo, error) {
 	}, nil
 }
 
+func (b *DemoBroker) GetSymbolSpec(ctx context.Context, symbol string) (*SymbolSpec, error) {
+	return FallbackSymbolSpec(symbol), nil
+}
+
 func (b *DemoBroker) ExecuteOrder(ctx context.Context, req OrderRequest) (*OrderResponse, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

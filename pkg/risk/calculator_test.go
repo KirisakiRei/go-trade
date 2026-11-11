@@ -2,6 +2,8 @@ package risk
 
 import (
 	"testing"
+
+	"ila-engine/pkg/broker"
 )
 
 func TestValidateRR(t *testing.T) {
@@ -84,19 +86,79 @@ func TestCalculateLotClampsRiskPercent(t *testing.T) {
 	}
 }
 
-// Validasi default riskPercent 0.5% (konservatif prop firm).
-func TestCalculateLotDefaultRiskHalfPercent(t *testing.T) {
-	// Equity $10,000, riskPercent <= 0 -> default 0.5% = $50
+// Validasi default riskPercent 1.0%.
+func TestCalculateLotDefaultRiskOnePercent(t *testing.T) {
+	// Equity $10,000, riskPercent <= 0 -> default 1.0% = $100
 	// XAUUSD: Entry 2000.0, SL 1995.0 ($5 move = 50 pips)
-	// 50 pips * $10/pip = $500 per lot. $50 / $500 = 0.10 lot
+	// 50 pips * $10/pip = $500 per lot. $100 / $500 = 0.20 lot
 	res, err := CalculateLot(10000, 0, 2000.0, 1995.0, 2.0, 2012.0, "XAUUSD")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.LotSize != 0.10 {
-		t.Fatalf("expected 0.10 lot on 0.5%% risk, got %f", res.LotSize)
+	if res.LotSize != 0.20 {
+		t.Fatalf("expected 0.20 lot on 1.0%% risk, got %f", res.LotSize)
 	}
-	if res.RiskAmount != 50.0 {
-		t.Fatalf("expected $50 risk amount, got %f", res.RiskAmount)
+	if res.RiskAmount != 100.0 {
+		t.Fatalf("expected $100 risk amount, got %f", res.RiskAmount)
+	}
+}
+
+func TestCalculateLotUS100MatchTraderMultiplier(t *testing.T) {
+	// Equity $13,131, risk 1% = $131.31
+	// US100 Match-Trader: Entry 27903, SL 27825 (78 points), TP 28059 (156 points, RR 2.0)
+	// Spec: PointValue = 20.0 ($20/point), VolumeStep = 0.01, VolumeMin = 0.01
+	// Dollar loss per lot = 78 * 20 = $1,560 per lot
+	// Expected lot = 131.31 / 1560 = 0.0841 -> floor to 0.08 lot
+	// Actual risk = 0.08 * 78 * 20 = $124.80 (< $131.31)
+	spec := broker.SymbolSpec{
+		Symbol:         "US100",
+		PointValue:     20.0,
+		VolumeMin:      0.01,
+		VolumeStep:     0.01,
+		VolumeMax:      20.0,
+		PricePrecision: 2,
+	}
+	res, err := CalculateLotWithSpec(13131, 1.0, 27903.0, 27825.0, 2.0, 28059.0, spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.LotSize != 0.08 {
+		t.Fatalf("expected 0.08 lot on Match-Trader US100 with multiplier 20, got %.2f", res.LotSize)
+	}
+	if res.RiskAmount > 131.31 {
+		t.Fatalf("risk amount %.2f exceeded 1%% risk budget 131.31", res.RiskAmount)
+	}
+	if !res.PassedRisk {
+		t.Fatalf("expected PassedRisk=true, got false")
+	}
+}
+
+func TestCalculateLotUSTECcTrader(t *testing.T) {
+	// Equity $13,131, risk 1% = $131.31
+	// USTEC cTrader: Entry 27903, SL 27825 (78 points), TP 28059 (156 points, RR 2.0)
+	// Spec: PointValue = 1.0 ($1/point), VolumeStep = 0.10, VolumeMin = 0.10
+	// Dollar loss per lot = 78 * 1 = $78 per lot
+	// Expected lot = 131.31 / 78 = 1.683 -> floor to 1.60 lot
+	// Actual risk = 1.60 * 78 * 1 = $124.80 (< $131.31)
+	spec := broker.SymbolSpec{
+		Symbol:         "USTEC",
+		PointValue:     1.0,
+		VolumeMin:      0.10,
+		VolumeStep:     0.10,
+		VolumeMax:      20.0,
+		PricePrecision: 2,
+	}
+	res, err := CalculateLotWithSpec(13131, 1.0, 27903.0, 27825.0, 2.0, 28059.0, spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.LotSize != 1.60 {
+		t.Fatalf("expected 1.60 lot on cTrader USTEC, got %.2f", res.LotSize)
+	}
+	if res.RiskAmount > 131.31 {
+		t.Fatalf("risk amount %.2f exceeded 1%% risk budget 131.31", res.RiskAmount)
+	}
+	if !res.PassedRisk {
+		t.Fatalf("expected PassedRisk=true, got false")
 	}
 }
