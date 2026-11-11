@@ -16,7 +16,7 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `7d60464`
+> **Commit terakhir saat log ini ditulis:** `d99b698` (merge PR #4 ke `develop`)
 > **Tag titik sinkron:** `sync/2026-11-07-friday-gate`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
@@ -68,6 +68,28 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 ---
 
 ## ⬇️ DARI HUMAN KE HERMES
+
+### [2026-11-11] PERBAIKAN — Empat PR Hermes digabung ke `develop`, scanner & jadwal lilin diselaraskan, engine live di VPS 1
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI — live di VPS 1 pada commit `d99b698`
+- **Ringkasan:**
+  - **PR #1 `fix/ila3-latest-active-fvg` (`c5e01cb`)** — ILA 3.0 hanya memakai FVG aktif terakhir (`GetLatestActiveIRL`) untuk bias HTF dan retracement MTF; pencarian tidak lagi mundur ke FVG usang. Ini membasmi false SELL pada USTEC.
+  - **PR #2 `fix/ila-external-sweep-and-h4-schedule` (`af9ddf2`)** — siklus tutup lilin H4 dan D1 diselaraskan ke New York close (17:00 NY) di `internal/engine/publisher.go`.
+  - **PR #3 `feat/dynamic-symbol-spec-and-risk-gate` (`fbe8649`)** — spesifikasi kontrak broker dibaca dinamis (`SymbolSpec`) plus *max risk assertion gate* yang meng-clamp lot bila melampaui toleransi 1.10x. Ini memperbaiki multiplier US100 Match-Trader (20x) vs cTrader (1x) yang bisa membuat over-risk 20x lipat. CLI scanner ikut diselaraskan agar memakai `b.GetSymbolSpec()` (`2df6ade`).
+  - **PR #4 `fix/ila-wick-sweep-reject-body-break` (`79fa5ec`)** — sweep ditegakkan murni sebagai *rejection wick*: bullish wajib `ck.Close >= cPrev.Low`, bearish wajib `ck.Close <= cPrev.High`, sehingga body yang menembus level ditolak. Presisi desimal di `formatILAVal` kini dinamis (Forex < 50.0 → `%.5f`, emas & indeks → `%.2f`).
+  - **Penyesuaian pasca-merge (`dc82416`)** — `menungguLTF` di `internal/engine/status.go` ditambah `WaitHTFCandleClose`, `WaitILA3MTFReversal`, dan `WaitILA3MTFFVGRetr`, sehingga jadwal evaluasi lilin mengikuti LTF ketika setup masih dalam fase menunggu.
+- **File / Bagian Terdampak:**
+  - `pkg/sequence/evaluator.go`, `pkg/sequence/sequence_test.go`
+  - `internal/engine/publisher.go`, `internal/engine/publisher_test.go`
+  - `pkg/broker/types.go`, `pkg/broker/multi_broker.go`, `pkg/broker/ctrader_broker.go`, `pkg/broker/matchtrader_broker.go`, `pkg/broker/mt5_broker.go`, `pkg/broker/demo_broker.go`, `pkg/risk/calculator.go`
+  - `pkg/ila/evaluator.go`, `pkg/ila/evaluator_test.go`
+  - `internal/engine/status.go`, `internal/engine/status_test.go`
+  - `cmd/scanner/main.go`, `cmd/ila3-scanner/main.go`
+- **Aksi yang diminta:** tidak ada. Semua perubahan sudah di `develop` dan sudah berjalan di VPS 1.
+- **Catatan:** `ila-engine-engine-1` (`:9443`) dan `ila-engine-engine3-1` (`:9444`) berstatus `Up (healthy)` setelah rebuild. Saat entri ini ditulis, working tree lokal `go-trade` sedang diubah agent lain, jadi `go build`/`go test` ulang sengaja tidak dijalankan di sini agar tidak mencampuri pekerjaan tersebut.
+
+---
 
 ### [2026-11-07] PERBAIKAN — Audit ILA 3.0 + Market Gate: Friday gate terlalu awal, label sesi salah, aturan harian hilang, equity fallback berbahaya
 - **Pelaku:** Human + Claude
