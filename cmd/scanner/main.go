@@ -294,11 +294,16 @@ func main() {
 	feedProvider := marketfeed.NewMultiFeedProvider()
 	evalService := service.NewEvaluationService(evalRepo, positionRepo, feedProvider)
 
-	// Inisialisasi Broker: Match-Trader (#1089632) khusus ILA 2.0
+	// Inisialisasi Broker:
+	// - Match-Trader (#1089632) untuk EURUSD & USTEC (Prop Challenge)
+	// - IC Markets cTrader (#10131354) khusus untuk XAUUSD ILA 2.0 ($5k Balance)
 	mtrBroker := broker.NewMatchTraderBroker("")
-	var tradeBroker broker.Broker = mtrBroker
+	cTraderBroker, _ := broker.NewCTraderBroker(broker.CTraderConfig{})
+	if cTraderBroker != nil {
+		defer cTraderBroker.Close()
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 
 	// 2. Check Closed Positions (TP / SL / Exit)
@@ -306,53 +311,76 @@ func main() {
 	db.Where("status = ?", "OPEN").Find(&openPositions)
 
 	if len(openPositions) > 0 {
-		activePositions, err := tradeBroker.GetOpenPositions(ctx)
-		if err == nil {
-			activeMap := make(map[string]bool)
-			for _, ap := range activePositions {
-				activeMap[ap.TicketNumber] = true
+		activeMap := make(map[string]bool)
+		if mtrBroker != nil {
+			if mtrPositions, err := mtrBroker.GetOpenPositions(ctx); err == nil {
+				for _, ap := range mtrPositions {
+					activeMap[ap.TicketNumber] = true
+				}
+			}
+		}
+		if cTraderBroker != nil {
+			if cPositions, err := cTraderBroker.GetOpenPositions(ctx); err == nil {
+				for _, ap := range cPositions {
+					activeMap[ap.TicketNumber] = true
+				}
+			}
+		}
+
+		for _, pos := range openPositions {
+			cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
+			cPosIDStr := strconv.FormatInt(cPosID, 10)
+
+			// Cek apakah posisi masih aktif di broker
+			isOpen := false
+			if activeMap[pos.TicketNumber] {
+				isOpen = true
+			}
+			if cPosID > 0 && activeMap[cPosIDStr] {
+				isOpen = true
+			}
+			if mtrID != "" && activeMap[mtrID] {
+				isOpen = true
+			}
+			if isOpen {
+				continue
 			}
 
-			for _, pos := range openPositions {
-				cPosID, mtrID := broker.ExtractTicketIDs(pos.TicketNumber)
-				cPosIDStr := strconv.FormatInt(cPosID, 10)
+			// Posisi tidak ada di daftar open. Cek konfirmasi closed position dari broker
+			exitPrice := pos.OpenPrice
+			actualPnL := 0.0
+			isDealFound := false
 
-				// Cek apakah posisi masih aktif di broker
-				isOpen := false
-				if activeMap[pos.TicketNumber] {
-					isOpen = true
-				}
-				if cPosID > 0 && activeMap[cPosIDStr] {
-					isOpen = true
-				}
-				if mtrID != "" && activeMap[mtrID] {
-					isOpen = true
-				}
-				if isOpen {
-					continue
-				}
-
-				// Posisi tidak ada di daftar open. Cek konfirmasi closed position dari Match-Trader
-				exitPrice := pos.OpenPrice
-				actualPnL := 0.0
-				isDealFound := false
-
-				if mtrBroker != nil && mtrID != "" {
-					closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-48*time.Hour), time.Now())
-					for _, cp := range closedMtr {
-						if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
-							exitPrice = cp.ClosePrice
-							actualPnL = cp.Profit
-							isDealFound = true
-							break
-						}
+			// 1. Cek deal penutup dari cTrader jika cPosID > 0
+			if cTraderBroker != nil && cPosID > 0 {
+				deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
+				for _, d := range deals {
+					if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
+						exitPrice = d.ExecutionPrice
+						actualPnL = d.GrossProfit
+						isDealFound = true
+						break
 					}
 				}
+			}
 
-				// Jika deal penutup belum ditemukan dari broker, jangan tutup prematur di database!
-				if !isDealFound {
-					continue
+			// 2. Cek closed position dari Match-Trader jika mtrID != ""
+			if !isDealFound && mtrBroker != nil && mtrID != "" {
+				closedMtr, _ := mtrBroker.GetClosedPositions(ctx, time.Now().Add(-48*time.Hour), time.Now())
+				for _, cp := range closedMtr {
+					if cp.ID == mtrID || strings.Contains(pos.TicketNumber, cp.ID) {
+						exitPrice = cp.ClosePrice
+						actualPnL = cp.Profit
+						isDealFound = true
+						break
+					}
 				}
+			}
+
+			// Jika deal penutup belum ditemukan dari broker, jangan tutup prematur di database!
+			if !isDealFound {
+				continue
+			}
 
 				isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
 				tol := 0.50
@@ -411,7 +439,6 @@ func main() {
 				_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 			}
 		}
-	}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)
@@ -419,13 +446,18 @@ func main() {
 	// 2.2 Process any unnotified evaluations and send to Telegram!
 	unnotified, _ := evalService.GetUnnotifiedEvaluations(ctx)
 	if len(unnotified) > 0 {
-		acc, _ := mtrBroker.GetAccountInfo(ctx)
-		currBal := 10000.0
-		if acc != nil && acc.Balance > 0 {
-			currBal = acc.Balance
-		}
-
 		for _, ev := range unnotified {
+			currBal := 10000.0
+			isXAU := strings.Contains(strings.ToUpper(ev.Symbol), "XAU") || strings.Contains(strings.ToUpper(ev.Symbol), "GOLD")
+			if isXAU && cTraderBroker != nil {
+				if accCb, err := cTraderBroker.GetAccountInfo(ctx); err == nil && accCb.Balance > 0 {
+					currBal = accCb.Balance
+				}
+			} else if mtrBroker != nil {
+				if accMtr, err := mtrBroker.GetAccountInfo(ctx); err == nil && accMtr.Balance > 0 {
+					currBal = accMtr.Balance
+				}
+			}
 			statusTitle := "🏁 **[TRADE CLOSED] HIT TAKE PROFIT 🎯**"
 			if ev.Outcome == "HIT_SL" {
 				statusTitle = "🛑 **[TRADE CLOSED] HIT STOP LOSS**"
@@ -557,16 +589,27 @@ func main() {
 					sl := setup.StopLoss
 					tp := setup.TakeProfit
 
+					// Routing Broker:
+					// - XAUUSD -> IC Markets cTrader (#10131354) dengan saldo $5,000 (Testing Performa ILA 2.0)
+					// - Simbol Lain (EURUSD, USTEC) -> Match-Trader Prop (#1089632)
+					var targetBroker broker.Broker = mtrBroker
+					brokerName := "Match-Trader Prop (#1089632)"
+					isXAU := strings.Contains(strings.ToUpper(sym), "XAU") || strings.Contains(strings.ToUpper(sym), "GOLD")
+					if isXAU && cTraderBroker != nil {
+						targetBroker = cTraderBroker
+						brokerName = "IC Markets cTrader (#10131354)"
+					}
+
 					riskPercent := DefaultRiskPercent
 					equity := AccountSize
-					acc, err := tradeBroker.GetAccountInfo(ctx)
+					acc, err := targetBroker.GetAccountInfo(ctx)
 					if err == nil && acc != nil && acc.Equity > 0 {
 						equity = acc.Equity
 					} else if acc != nil && acc.Balance > 0 {
 						equity = acc.Balance
 					}
 					riskDollars := equity * (riskPercent / 100.0)
-					lot, spec := calcLot(ctx, tradeBroker, sym, entryPrice, sl, riskDollars)
+					lot, spec := calcLot(ctx, targetBroker, sym, entryPrice, sl, riskDollars)
 
 					specDesc := "$10.00/pip (Std Lot)"
 					if spec != nil {
@@ -586,7 +629,7 @@ func main() {
 					if isTradeLocked {
 						if prevILA.LastStatus != "DAILY_TRADE_LOCK" || prevILA.LastBreakTime != breakTimeStr {
 							table := makeILA2OrderBox(
-								"Match-Trader Prop (#1089632)",
+								brokerName,
 								fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
 								"ENTRY MANUAL (LOCK)",
 								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
@@ -621,7 +664,7 @@ func main() {
 							var existingPos model.Position
 							db.Model(&model.Position{}).Where("symbol = ? AND status = 'OPEN' AND timeframe = ? AND (setup_id LIKE 'ILA%' OR notes LIKE '%ILA%')", sym, ep.LTF).First(&existingPos)
 							table := makeILA2OrderBox(
-								"Match-Trader Prop (#1089632)",
+								brokerName,
 								fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
 								"ENTRY MANUAL (HOLD)",
 								formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
@@ -651,7 +694,7 @@ func main() {
 
 					if !executeEnabled {
 						table := makeILA2OrderBox(
-							"Match-Trader Prop (#1089632)",
+							brokerName,
 							fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
 							"MODE PANTAU",
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
@@ -675,14 +718,14 @@ func main() {
 						continue
 					}
 
-					orderRes, err := tradeBroker.ExecuteOrder(ctx, broker.OrderRequest{
+					orderRes, err := targetBroker.ExecuteOrder(ctx, broker.OrderRequest{
 						Symbol:     sym,
 						Direction:  dir,
 						OpenPrice:  entryPrice,
 						StopLoss:   sl,
 						TakeProfit: tp,
 						LotSize:    lot,
-						Comment:    fmt.Sprintf("ILA %s->%s %s", ep.HTF, ep.LTF, setupID),
+						Comment:    fmt.Sprintf("ILA 2.0 %s->%s %s", ep.HTF, ep.LTF, setupID),
 						SetupID:    setupID,
 					})
 
@@ -706,11 +749,11 @@ func main() {
 							RiskReward:   setup.RiskReward,
 							Status:       "OPEN",
 							OpenedAt:     nowDt,
-							Notes:        fmt.Sprintf("Broker: Match-Trader (1089632) | Metode: ILA 2.0 (%s ➡️ %s) | %s", ep.HTF, ep.LTF, setup.Summary),
+							Notes:        fmt.Sprintf("Broker: %s | Metode: ILA 2.0 (%s ➡️ %s) | %s", brokerName, ep.HTF, ep.LTF, setup.Summary),
 						})
 
 						table := makeILA2OrderBox(
-							"Match-Trader Prop (#1089632)",
+							brokerName,
 							fmt.Sprintf("ILA 2.0 (%s ➡️ %s)", ep.HTF, ep.LTF),
 							"#"+orderRes.TicketNumber,
 							formatPrice(sym, entryPrice), formatPrice(sym, sl), formatPrice(sym, tp),
@@ -735,7 +778,7 @@ func main() {
 						prevILA.LastHTFStatus = setup.Status
 						state.ILAPairs[ilaKey] = prevILA
 					} else {
-						messages = append(messages, fmt.Sprintf("⚠️ **Gagal Auto-Eksekusi ILA Match-Trader (%s %s ➡️ %s):** %v", sym, ep.HTF, ep.LTF, err))
+						messages = append(messages, fmt.Sprintf("⚠️ **Gagal Auto-Eksekusi ILA %s (%s %s ➡️ %s):** %v", brokerName, sym, ep.HTF, ep.LTF, err))
 					}
 					continue
 				}
