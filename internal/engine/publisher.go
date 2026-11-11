@@ -32,6 +32,19 @@ type Publisher struct {
 
 	pakaiJadwalLilin bool
 	bufferLilin      time.Duration
+
+	// feed memilih sumber candle per simbol. Nil berarti engine memakai
+	// pemetaan bawaan penyedia data (perilaku lama).
+	feed FeedRouter
+}
+
+// FeedRouter menetapkan dan melaporkan feed candle per simbol.
+//
+// Dipenuhi marketfeed.MultiFeedProvider. Antarmuka kecil ini menjaga package
+// engine tetap tidak bergantung pada detail penyedia data.
+type FeedRouter interface {
+	SetSymbolFeed(symbol, feed string)
+	FeedFor(symbol string) string
 }
 
 // slotState mencatat slot sinyal beserta identitas simbolnya, supaya sinyal
@@ -41,6 +54,7 @@ type slotState struct {
 	sym             string
 	htf             string
 	ltf             string
+	feed            string
 	lastStatus      signal.Status
 	lastEvaluatedAt time.Time
 }
@@ -63,6 +77,25 @@ func (p *Publisher) DenganJadwalLilin(buffer time.Duration) *Publisher {
 	p.pakaiJadwalLilin = true
 	p.bufferLilin = buffer
 	return p
+}
+
+// DenganFeedRouter menyuntikkan pemilih feed candle per simbol.
+func (p *Publisher) DenganFeedRouter(fr FeedRouter) *Publisher {
+	p.feed = fr
+	return p
+}
+
+// terapkanFeed menyelaraskan feed penyedia data dengan permintaan Runner lalu
+// mengembalikan feed efektif untuk simbol tersebut.
+//
+// Nilai kosong ikut diterapkan: bila admin mengosongkan feed sebuah pair, engine
+// harus kembali ke pemetaan bawaannya, bukan memakai pilihan lama selamanya.
+func (p *Publisher) terapkanFeed(symbol string) string {
+	if p.feed == nil {
+		return ""
+	}
+	p.feed.SetSymbolFeed(symbol, p.reg.WantedFeed(symbol))
+	return p.feed.FeedFor(symbol)
 }
 
 // WithClock memakai jam buatan pada pengujian.
@@ -155,6 +188,10 @@ func (p *Publisher) pairsFor(symbol string) []Pair {
 
 // evaluateSlot mengevaluasi satu slot lalu menerbitkan hasilnya.
 func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, now time.Time) {
+	// Feed diselaraskan lebih dulu: evaluator harus membaca lilin dari broker
+	// yang dipilih admin, bukan dari pemetaan bawaan.
+	feed := p.terapkanFeed(symbol)
+
 	res, err := p.eval.Evaluate(symbol, pair.HTF, pair.LTF)
 	if err != nil {
 		// Gagal mengambil data bukan sinyal. Dicatat paling sering sekali per
@@ -173,8 +210,10 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 	p.mu.Lock()
 	st := p.slots[key]
 	if st == nil {
-		st = &slotState{sym: symbol, htf: pair.HTF, ltf: pair.LTF}
+		st = &slotState{sym: symbol, htf: pair.HTF, ltf: pair.LTF, feed: feed}
 		p.slots[key] = st
+	} else if feed != "" {
+		st.feed = feed
 	}
 	st.lastEvaluatedAt = now
 	st.lastStatus = status
@@ -199,7 +238,7 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 			return
 		}
 		p.mu.Unlock()
-		p.broadcastStatus(symbol, pair, status, now, res)
+		p.broadcastStatus(symbol, pair, status, now, res, feed)
 		return
 	}
 
@@ -243,7 +282,7 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 	if previous != "" {
 		p.broadcast(superseded(previous, st, now))
 	}
-	p.broadcast(p.toOut(sig, action, res))
+	p.broadcast(p.toOut(sig, action, res, feed))
 }
 
 // expireAll menarik sinyal yang lewat masa berlaku.
@@ -290,7 +329,11 @@ func (p *Publisher) Snapshot(symbols []string) []Signal {
 				continue
 			}
 		}
-		out = append(out, p.toOut(*active, signal.ActionPublish, nil))
+		feed := st.feed
+		if feed == "" {
+			feed = p.terapkanFeed(active.Symbol)
+		}
+		out = append(out, p.toOut(*active, signal.ActionPublish, nil, feed))
 	}
 	return out
 }
@@ -328,7 +371,7 @@ func (p *Publisher) logGagal(symbol string, pair Pair, err error) {
 }
 
 // broadcastStatus mengirim status menunggu dengan data struktur pendukung.
-func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time, res *Result) {
+func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time, res *Result, feed string) {
 	dir := "NEUTRAL"
 	var summary, nextAction, sequenceState string
 	var htfSweep *ila.HTFSweep
@@ -358,6 +401,7 @@ func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Stat
 		HTFSweep:      htfSweep,
 		CISD:          cisd,
 		SequenceState: sequenceState,
+		FeedSource:    feed,
 		PublishedAt:   now,
 		ExpiresAt:     now.Add(signal.TTLUntuk(pair.LTF)),
 	})
@@ -471,13 +515,14 @@ func superseded(id string, st *slotState, now time.Time) Signal {
 	}
 }
 
-func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result) Signal {
+func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result, feed string) Signal {
 	out := Signal{
 		ID: sig.ID, Symbol: sig.Symbol, HTF: sig.HTF, LTF: sig.LTF,
 		Status: sig.Status, Action: action, Direction: sig.Direction,
 		Entry: sig.Entry, StopLoss: sig.StopLoss, TakeProfit: sig.TakeProfit,
 		RiskReward: sig.RiskReward, Summary: sig.Summary, NextAction: sig.NextAction,
 		PublishedAt: sig.PublishedAt, ExpiresAt: sig.ExpiresAt,
+		FeedSource: feed,
 	}
 	if res != nil {
 		out.PassedMinRR = res.PassedMinRR

@@ -37,6 +37,7 @@ func toProto(sig engine.Signal, v engine.Version) *enginev1.Signal {
 		FinalZoneTp:     sig.FinalZoneTP,
 		QuarterInfo:     sig.QuarterInfo,
 		SsmtResult:      sig.SSMTResult,
+		FeedSource:      sig.FeedSource,
 	}
 	if !sig.PublishedAt.IsZero() {
 		out.PublishedAt = timestamppb.New(sig.PublishedAt)

@@ -41,6 +41,11 @@ type Signal struct {
 	QuarterInfo    string
 	SSMTResult     string
 
+	// FeedSource adalah sumber candle yang dipakai evaluasi, mis. "FOREXCOM".
+	// Ikut dikirim ke Runner agar dashboard menampilkan chart dari feed yang
+	// sama dengan yang dibaca engine.
+	FeedSource string
+
 	SupersededBy string
 	Reason       string
 }

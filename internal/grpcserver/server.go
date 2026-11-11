@@ -71,17 +71,18 @@ func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) 
 	symbols := sanitize(req.GetSymbols())
 	pairs := pasanganDari(req.GetPairs())
 	s.reg.Add(engine.Subscriber{
-		ID:         req.GetSubscriberId(),
-		Symbols:    toSet(symbols),
-		Pairs:      pairs,
-		WantStatus: req.GetWantStatusUpdates(),
-		Send:       s.senderFor(req.GetSubscriberId()),
+		ID:          req.GetSubscriberId(),
+		Symbols:     toSet(symbols),
+		Pairs:       pairs,
+		SymbolFeeds: req.GetSymbolFeeds(),
+		WantStatus:  req.GetWantStatusUpdates(),
+		Send:        s.senderFor(req.GetSubscriberId()),
 	})
 
 	log.Info("pelanggan berlangganan",
 		"evt", "subscribe.ok",
 		"subscriber", req.GetSubscriberId(), "symbols", symbols,
-		"pairs", len(pairs))
+		"pairs", len(pairs), "feeds", len(req.GetSymbolFeeds()))
 
 	return &enginev1.SubscribeResponse{
 		Ok:              true,
@@ -129,7 +130,8 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 	symbols := sanitize(req.GetSymbols())
 	s.reg.Add(engine.Subscriber{
 		ID: id, Symbols: toSet(symbols),
-		WantStatus: req.GetWantStatusUpdates(), Send: s.senderFor(id),
+		SymbolFeeds: req.GetSymbolFeeds(),
+		WantStatus:  req.GetWantStatusUpdates(), Send: s.senderFor(id),
 	})
 
 	defer func() {

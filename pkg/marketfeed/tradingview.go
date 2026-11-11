@@ -83,6 +83,25 @@ func (p *TradingViewProvider) MapSymbol(symbol string) string {
 	}
 }
 
+// MapSymbolWithFeed memetakan simbol ke "<FEED>:<SIMBOL>" sesuai pilihan admin.
+//
+// Feed kosong berarti pemetaan bawaan (FOREXCOM untuk forex/logam/indeks,
+// BINANCE untuk kripto) dipertahankan agar perilaku lama tidak berubah.
+func (p *TradingViewProvider) MapSymbolWithFeed(symbol, feed string) string {
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+	if strings.Contains(sym, ":") {
+		return sym
+	}
+
+	f := strings.ToUpper(strings.TrimSpace(feed))
+	if f == "" {
+		return p.MapSymbol(sym)
+	}
+
+	symClean := strings.ReplaceAll(sym, "/", "")
+	return f + ":" + symClean
+}
+
 func (p *TradingViewProvider) MapResolution(timeframe string) string {
 	tf := strings.ToUpper(strings.TrimSpace(timeframe))
 	switch tf {
@@ -156,7 +175,16 @@ func formatTVMsg(funcName string, params []any) string {
 }
 
 func (p *TradingViewProvider) FetchCandles(ctx context.Context, symbol string, timeframe string, limit int) ([]indicators.Candle, error) {
-	tvSymbol := p.MapSymbol(symbol)
+	return p.FetchCandlesWithFeed(ctx, symbol, "", timeframe, limit)
+}
+
+// FetchCandlesWithFeed mengambil candle dari feed broker tertentu, mis.
+// "ICMARKETS" atau "FOREXCOM". Feed kosong memakai pemetaan bawaan.
+func (p *TradingViewProvider) FetchCandlesWithFeed(ctx context.Context, symbol, feed, timeframe string, limit int) ([]indicators.Candle, error) {
+	return p.fetch(ctx, p.MapSymbolWithFeed(symbol, feed), timeframe, limit)
+}
+
+func (p *TradingViewProvider) fetch(ctx context.Context, tvSymbol, timeframe string, limit int) ([]indicators.Candle, error) {
 	resolution := p.MapResolution(timeframe)
 	if resolution == "" {
 		return nil, fmt.Errorf("timeframe TradingView tidak dikenal: %q", timeframe)

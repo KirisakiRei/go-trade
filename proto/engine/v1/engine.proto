@@ -132,6 +132,11 @@ message Signal {
   double critical_zone_tp = 24; // target StDev -2.0 s.d. -2.5
   string quarter_info   = 25;  // ringkasan Quarterly Theory
   string ssmt_result    = 26;  // ringkasan SMT
+
+  // feed_source adalah sumber candle yang dipakai evaluasi ini, mis.
+  // "FOREXCOM" atau "ICMARKETS". Dashboard memakai nilai ini agar chart yang
+  // ditampilkan berasal dari feed yang sama dengan yang dibaca engine.
+  string feed_source = 27;
 }
 
 message SignalUpdate {
@@ -188,6 +193,10 @@ message SubscribeRequest {
   repeated string symbols = 2;
   repeated Pair pairs = 3;
   bool want_status_updates = 4;
+  // symbol_feeds memetakan simbol kanonik ke sumber candle yang dipilih admin,
+  // mis. {"XAUUSD": "FOREXCOM", "NAS100": "ICMARKETS"}. Simbol tanpa entri
+  // memakai pemetaan bawaan engine.
+  map<string, string> symbol_feeds = 5;
 }
 
 message Pair {

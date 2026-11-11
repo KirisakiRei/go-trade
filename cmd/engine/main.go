@@ -84,16 +84,18 @@ func main() {
 
 	reg := engine.NewRegistry()
 
+	// Satu penyedia data dipakai bersama oleh evaluator dan publisher: evaluator
+	// menarik lilin, publisher menyelaraskan feed pilihan admin per simbol.
+	feed := marketfeed.NewMultiFeedProvider()
+
 	var evaluator engine.Evaluator
 	switch *strategy {
 	case "ila-3.0":
-		feed := marketfeed.NewMultiFeedProvider()
 		evaluator = engine.NewILA3Evaluator(feed)
 	default:
 		if *strategy != "ila-2.0" {
 			logger.Warn("strategi tidak dikenal, memakai ila-2.0", "diminta", *strategy)
 		}
-		feed := marketfeed.NewMultiFeedProvider()
 		evaluator = engine.NewILA2Evaluator(service.NewILA2Service(feed))
 	}
 
@@ -101,7 +103,8 @@ func main() {
 	// Evaluasi hanya dijadwalkan pada penutupan lilin: setup yang sama tidak
 	// boleh diterbitkan ulang setiap siklus scan.
 	pub := engine.NewPublisher(evaluator, reg, ver, logger).
-		DenganJadwalLilin(3 * time.Second)
+		DenganJadwalLilin(3 * time.Second).
+		DenganFeedRouter(feed)
 
 	// Simbol dari konfigurasi dijadikan pelanggan tetap agar engine bisa
 	// dipakai tanpa Runner selama pengujian.

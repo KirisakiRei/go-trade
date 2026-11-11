@@ -20,6 +20,10 @@ type Subscriber struct {
 	// Nil atau kosong berarti "semua pasangan" — perilaku lama dipertahankan
 	// agar klien yang belum mengirim pairs tidak berubah perilakunya.
 	Pairs []Pair
+	// SymbolFeeds memetakan simbol kanonik ke feed candle pilihan admin,
+	// mis. {"NAS100": "ICMARKETS"}. Simbol tanpa entri memakai pemetaan
+	// bawaan engine.
+	SymbolFeeds map[string]string
 	// Send dipanggil untuk setiap sinyal. Harus tidak memblokir lama.
 	Send func(Signal)
 }
@@ -108,6 +112,25 @@ func (r *Registry) WantedPairs(symbol string) ([]Pair, bool) {
 		return out[i].HTF < out[j].HTF
 	})
 	return out, true
+}
+
+// WantedFeed mengembalikan feed candle yang diminta pelanggan untuk satu
+// simbol. Pelanggan pertama yang menyebutkannya dipakai; seluruh Runner
+// membaca konfigurasi yang sama dari database platform, sehingga nilainya
+// praktis selalu seragam.
+func (r *Registry) WantedFeed(symbol string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, s := range r.subs {
+		if _, ok := s.Symbols[symbol]; !ok {
+			continue
+		}
+		if feed := s.SymbolFeeds[symbol]; feed != "" {
+			return feed
+		}
+	}
+	return ""
 }
 
 // normalizePairs membuang pasangan yang tidak lengkap dan duplikat.
