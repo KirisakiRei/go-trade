@@ -242,6 +242,32 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-11] PERBAIKAN — Penegakan Aturan Baku Wick Sweep vs Body Break & Presisi Desimal Forex
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Penegakan Rejection Wick (Anti Body Break):**
+   - Di `DetectHTFIlaSweep` (`pkg/ila/evaluator.go`), sweep lilin HTF kini wajib berupa sapuan sumbu (*wick rejection*) murni.
+   - Untuk Bullish sweep (mencari BUY): ditambahkan validasi wajib `ck.Close >= cPrev.Low`. Jika body lilin ditutup menembus ke bawah Low acuan (`ck.Close < cPrev.Low`), lilin dinyatakan sebagai **Body Breakdown** dan seketika ditolak sebagai sweep.
+   - Untuk Bearish sweep (mencari SELL): ditambahkan validasi wajib `ck.Close <= cPrev.High`. Jika body lilin ditutup menembus ke atas High acuan (`ck.Close > cPrev.High`), lilin dinyatakan sebagai **Body Breakout** dan seketika ditolak sebagai sweep.
+   - Kasus riil: Mencegah lilin H1 EURUSD 00:00 NY (Close 1.11604 < cPrev.Low 1.11620) terdeteksi secara keliru sebagai Bullish Sweep di tengah tren penurunan besar.
+2. **Presisi Desimal Dinamis (`formatILAVal`):**
+   - Menghilangkan hardcoded format `%.2f` di `evaluator.go` yang menyebabkan harga pair Forex tercetak bulat rancu seperti `(1.12 - 1.12)` pada alert Telegram.
+   - Pair dengan nilai < 50.0 (Forex) secara otomatis menggunakan presisi 5 desimal (`%.5f`), sedangkan Emas dan Indeks tetap menggunakan 2 desimal (`%.2f`).
+3. **Pengujian Unit Test:**
+   - Ditambahkan `TestBodyBreakoutRejectedAsSweep` di `pkg/ila/evaluator_test.go` untuk mengunci dan memvalidasi penolakan lilin body breakdown/breakout sebagai sweep.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go`
+- `pkg/ila/evaluator_test.go`
+- `docs/AGENT_LOG.md`
+
+#### Verifikasi
+- `go test -v ./pkg/ila/...` PASS 100% (termasuk test baru `TestBodyBreakoutRejectedAsSweep`).
+- Verifikasi CLI live `EURUSD H1 -> M5`: bias arah kembali selaras 100% BEARISH SELL bersama H4 -> M15.
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
