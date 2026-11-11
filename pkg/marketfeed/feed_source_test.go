@@ -12,11 +12,47 @@ func TestMapSymbolWithFeed(t *testing.T) {
 		feed   string
 		want   string
 	}{
-		{"NAS100", "ICMARKETS", "ICMARKETS:NAS100"},
+		{"US30", "ICMARKETS", "ICMARKETS:US30"},
 		{"xauusd", "icmarkets", "ICMARKETS:XAUUSD"},
 		{"EUR/USD", "OANDA", "OANDA:EURUSD"},
 		{"XAUUSD", "", "FOREXCOM:XAUUSD"},
 		{"USTEC", "", "FOREXCOM:NAS100"},
+	}
+
+	for _, c := range cases {
+		if got := p.MapSymbolWithFeed(c.symbol, c.feed); got != c.want {
+			t.Errorf("MapSymbolWithFeed(%q, %q) = %q, ingin %q", c.symbol, c.feed, got, c.want)
+		}
+	}
+}
+
+// TestAliasSimbolPerFeed menutup kasus yang membuat candle tidak pernah masuk:
+// simbol yang tidak dikenal feed dijawab TradingView dengan "invalid symbol",
+// bukan dengan bar kosong.
+//
+// Setiap pasangan sudah diverifikasi langsung ke feed TradingView.
+func TestAliasSimbolPerFeed(t *testing.T) {
+	p := NewTradingViewProvider()
+
+	cases := []struct {
+		symbol string
+		feed   string
+		want   string
+	}{
+		// FOREX.com memakai NAS100 dan SPX500.
+		{"USTEC", "FOREXCOM", "FOREXCOM:NAS100"},
+		{"US500", "FOREXCOM", "FOREXCOM:SPX500"},
+		// IC Markets memakai USTEC/US500, tapi DE40 dan XTIUSD.
+		{"USTEC", "ICMARKETS", "ICMARKETS:USTEC"},
+		{"US500", "ICMARKETS", "ICMARKETS:US500"},
+		{"GER40", "ICMARKETS", "ICMARKETS:DE40"},
+		{"USOIL", "ICMARKETS", "ICMARKETS:XTIUSD"},
+		// Sama di kedua feed.
+		{"GER40", "FOREXCOM", "FOREXCOM:GER40"},
+		{"USOIL", "FOREXCOM", "FOREXCOM:USOIL"},
+		// Kripto hanya memakai pasangan USDT di Binance.
+		{"BTCUSD", "BINANCE", "BINANCE:BTCUSDT"},
+		{"BTCUSD", "ICMARKETS", "ICMARKETS:BTCUSD"},
 	}
 
 	for _, c := range cases {

@@ -83,6 +83,31 @@ func (p *TradingViewProvider) MapSymbol(symbol string) string {
 	}
 }
 
+// feedAliases menerjemahkan simbol katalog ke nama yang dipakai feed tersebut.
+//
+// Pemetaan ini WAJIB sama dengan yang dipakai backend platform
+// (internal/market di go-ila-platform). Contoh: katalog memakai USTEC dan
+// US500, sedangkan FOREX.com di TradingView menamainya NAS100 dan SPX500 —
+// sementara IC Markets memakai USTEC dan US500, tapi menyebut GER40 sebagai
+// DE40 dan USOIL sebagai XTIUSD.
+//
+// Semua pasangan di bawah sudah diuji langsung ke feed TradingView, bukan
+// tebakan.
+var feedAliases = map[string]map[string]string{
+	"FOREXCOM": {
+		"USTEC": "NAS100",
+		"US100": "NAS100",
+		"NDX":   "NAS100",
+		"US500": "SPX500",
+		"SPX":   "SPX500",
+	},
+	"ICMARKETS": {
+		"GER40": "DE40",
+		"USOIL": "XTIUSD",
+		"WTI":   "XTIUSD",
+	},
+}
+
 // MapSymbolWithFeed memetakan simbol ke "<FEED>:<SIMBOL>" sesuai pilihan admin.
 //
 // Feed kosong berarti pemetaan bawaan (FOREXCOM untuk forex/logam/indeks,
@@ -99,6 +124,16 @@ func (p *TradingViewProvider) MapSymbolWithFeed(symbol, feed string) string {
 	}
 
 	symClean := strings.ReplaceAll(sym, "/", "")
+
+	// Binance memakai pasangan USDT, sedangkan katalog ILA memakai akhiran USD.
+	if f == "BINANCE" && strings.HasSuffix(symClean, "USD") && !strings.HasSuffix(symClean, "USDT") {
+		symClean += "T"
+	}
+
+	if alias, ok := feedAliases[f][symClean]; ok {
+		symClean = alias
+	}
+
 	return f + ":" + symClean
 }
 
