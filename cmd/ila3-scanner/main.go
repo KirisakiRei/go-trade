@@ -98,41 +98,41 @@ func formatPrice(symbol string, val float64) string {
 	return fmt.Sprintf("%.5f", val)
 }
 
-func calcLot(symbol string, entry, sl, riskDollars float64) float64 {
+func calcLot(ctx context.Context, b broker.Broker, symbol string, entry, sl, riskDollars float64) (float64, *broker.SymbolSpec) {
+	var spec *broker.SymbolSpec
+	if b != nil {
+		spec, _ = b.GetSymbolSpec(ctx, symbol)
+	}
+	if spec == nil || spec.PointValue <= 0 {
+		spec = broker.FallbackSymbolSpec(symbol)
+	}
+
 	dist := math.Abs(entry - sl)
 	if dist <= 0.000001 || riskDollars <= 0 {
-		return 0.01
+		return spec.VolumeMin, spec
 	}
 
-	upper := strings.ToUpper(symbol)
-	var lot float64
-	if strings.Contains(upper, "XAU") || strings.Contains(upper, "GOLD") {
-		// Gold: 1 Lot = 100 oz. $1 move = $100 per lot
-		lot = riskDollars / (dist * 100.0)
-	} else if strings.Contains(upper, "NAS") || strings.Contains(upper, "TEC") || strings.Contains(upper, "US100") {
-		// Index: 1 Lot = 1 unit. 1 pt = $1 per lot
-		lot = riskDollars / dist
-		lot = math.Floor(lot*10) / 10.0
-		if lot < 0.10 {
-			lot = 0.10
-		}
-	} else {
-		// Forex Standard: 100,000 units. 1 pip (0.00010) = $10/lot
-		pips := dist / 0.00010
-		if pips <= 0.01 {
-			return 0.01
-		}
-		lot = riskDollars / (pips * 10.0)
+	dollarLossPerLot := dist * spec.PointValue
+	rawLot := (riskDollars / dollarLossPerLot) + 1e-8
+
+	step := spec.VolumeStep
+	if step <= 0 {
+		step = 0.01
+	}
+	lot := math.Floor(rawLot/step) * step
+	if spec.VolumeMin > 0 && lot < spec.VolumeMin {
+		lot = spec.VolumeMin
+	}
+	if spec.VolumeMax > 0 && lot > spec.VolumeMax {
+		lot = spec.VolumeMax
 	}
 
-	lot = math.Round(lot*100) / 100.0
-	if lot < 0.01 {
-		lot = 0.01
+	// Max Risk Assertion Gate: if rounded lot overshoots risk budget by > 10%, clamp down by step
+	if lot > spec.VolumeMin && (lot*dollarLossPerLot) > (riskDollars*1.10) {
+		lot = math.Floor((riskDollars/dollarLossPerLot)/step) * step
 	}
-	if lot > 20.0 {
-		lot = 20.0
-	}
-	return lot
+
+	return math.Round(lot*100) / 100.0, spec
 }
 
 // executeEnabled menandai apakah scanner boleh mengirim order ke broker.
@@ -188,82 +188,82 @@ func main() {
 			for _, pos := range openPositions {
 				if !activeMap[pos.TicketNumber] {
 					// Posisi sudah closed di cTrader!
-				cPosID, _ := strconv.ParseInt(pos.TicketNumber, 10, 64)
-				exitPrice := pos.OpenPrice
-				actualPnL := 0.0
-				if cPosID > 0 {
-					deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
-					for _, d := range deals {
-						if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
-							exitPrice = d.ExecutionPrice
-							actualPnL = d.GrossProfit
-							break
+					cPosID, _ := strconv.ParseInt(pos.TicketNumber, 10, 64)
+					exitPrice := pos.OpenPrice
+					actualPnL := 0.0
+					if cPosID > 0 {
+						deals, _ := cTraderBroker.GetDealsByPosition(ctx, cPosID)
+						for _, d := range deals {
+							if d.GrossProfit != 0 || (pos.Direction == "BUY" && d.TradeSide == "SELL") || (pos.Direction == "SELL" && d.TradeSide == "BUY") {
+								exitPrice = d.ExecutionPrice
+								actualPnL = d.GrossProfit
+								break
+							}
 						}
 					}
-				}
 
-				hitTP := false
-				if actualPnL > 0 {
-					hitTP = true
-				} else if actualPnL < 0 {
-					hitTP = false
-				} else {
-					isForex := strings.Contains(pos.Symbol, "EUR") || strings.Contains(pos.Symbol, "GBP") || strings.Contains(pos.Symbol, "AUD")
-					tol := 0.50
-					if isForex {
-						tol = 0.00050
-					}
-					if pos.Direction == "BUY" {
-						hitTP = exitPrice >= (pos.TakeProfit - tol)
+					hitTP := false
+					if actualPnL > 0 {
+						hitTP = true
+					} else if actualPnL < 0 {
+						hitTP = false
 					} else {
-						hitTP = exitPrice <= (pos.TakeProfit + tol)
+						isForex := strings.Contains(pos.Symbol, "EUR") || strings.Contains(pos.Symbol, "GBP") || strings.Contains(pos.Symbol, "AUD")
+						tol := 0.50
+						if isForex {
+							tol = 0.00050
+						}
+						if pos.Direction == "BUY" {
+							hitTP = exitPrice >= (pos.TakeProfit - tol)
+						} else {
+							hitTP = exitPrice <= (pos.TakeProfit + tol)
+						}
 					}
-				}
 
-				status := "CLOSED_SL"
-				outcomeR := -1.0
-				if hitTP {
-					status = "CLOSED_TP"
-					outcomeR = pos.RiskReward
-				}
+					status := "CLOSED_SL"
+					outcomeR := -1.0
+					if hitTP {
+						status = "CLOSED_TP"
+						outcomeR = pos.RiskReward
+					}
 
-				now := time.Now().UTC()
-				db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
-					"status":      status,
-					"exit_price":  exitPrice,
-					"profit_loss": actualPnL,
-					"outcome_r":   outcomeR,
-					"closed_at":   now,
-				})
+					now := time.Now().UTC()
+					db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
+						"status":      status,
+						"exit_price":  exitPrice,
+						"profit_loss": actualPnL,
+						"outcome_r":   outcomeR,
+						"closed_at":   now,
+					})
 
-				rSign := "+"
-				if outcomeR < 0 {
-					rSign = ""
-				}
-				pnlSign := "+"
-				if actualPnL < 0 {
-					pnlSign = ""
-				}
-				sName, sEmoji := getSymbolDisplay(pos.Symbol)
-				statusTitle := "🏁 **[TRADE CLOSED ILA 3.0 - CTRADER] HIT TAKE PROFIT 🎯**"
-				if status == "CLOSED_SL" {
-					statusTitle = "🛑 **[TRADE CLOSED ILA 3.0 - CTRADER] HIT STOP LOSS**"
-				}
+					rSign := "+"
+					if outcomeR < 0 {
+						rSign = ""
+					}
+					pnlSign := "+"
+					if actualPnL < 0 {
+						pnlSign = ""
+					}
+					sName, sEmoji := getSymbolDisplay(pos.Symbol)
+					statusTitle := "🏁 **[TRADE CLOSED ILA 3.0 - CTRADER] HIT TAKE PROFIT 🎯**"
+					if status == "CLOSED_SL" {
+						statusTitle = "🛑 **[TRADE CLOSED ILA 3.0 - CTRADER] HIT STOP LOSS**"
+					}
 
-				closeMsg := fmt.Sprintf(`%s
+					closeMsg := fmt.Sprintf(`%s
 • **Tiket:** `+"`#%s`"+` (%s %s %s)
 • **Entry:** `+"`%s`"+` ➡️ **Exit:** `+"`%s`"+`
 • **Hasil:** `+"`%s%.2f R`"+` (`+"`%s$%.2f`"+`)
 • **Broker:** IC Markets cTrader (#10131354)`,
-					statusTitle, pos.TicketNumber, sEmoji, sName, pos.Direction,
-					formatPrice(pos.Symbol, pos.OpenPrice), formatPrice(pos.Symbol, exitPrice),
-					rSign, outcomeR, pnlSign, actualPnL,
-				)
-				messages = append(messages, closeMsg)
+						statusTitle, pos.TicketNumber, sEmoji, sName, pos.Direction,
+						formatPrice(pos.Symbol, pos.OpenPrice), formatPrice(pos.Symbol, exitPrice),
+						rSign, outcomeR, pnlSign, actualPnL,
+					)
+					messages = append(messages, closeMsg)
+				}
 			}
 		}
 	}
-}
 
 	// 4. Market hours gate (skip weekend and rollover)
 	nowUtc := time.Now().UTC()
@@ -364,7 +364,7 @@ func main() {
 						continue
 					}
 					riskDollars := equity * 0.005 // strict 0.5% live equity risk
-					lot := calcLot(sym, setup.EntryPrice, setup.StopLoss, riskDollars)
+					lot, _ := calcLot(ctx, cTraderBroker, sym, setup.EntryPrice, setup.StopLoss, riskDollars)
 
 					setupID := fmt.Sprintf("ILA3-%s-%s-%s", sym, ps.ModeName, time.Now().Format("200601021504"))
 					orderRes, err := cTraderBroker.ExecuteOrder(ctx, broker.OrderRequest{

@@ -83,44 +83,41 @@ func saveState(s MonitorState) {
 	}
 }
 
-func calcLot(symbol string, entry, sl, riskAmount float64) float64 {
-	isGold := strings.Contains(symbol, "XAU") || strings.Contains(symbol, "GOLD")
-	isIndex := strings.Contains(symbol, "NAS") || strings.Contains(symbol, "TEC") || strings.Contains(symbol, "US100") || strings.Contains(symbol, "US30") || strings.Contains(symbol, "US500") || strings.Contains(symbol, "NDX")
+func calcLot(ctx context.Context, b broker.Broker, symbol string, entry, sl, riskAmount float64) (float64, *broker.SymbolSpec) {
+	var spec *broker.SymbolSpec
+	if b != nil {
+		spec, _ = b.GetSymbolSpec(ctx, symbol)
+	}
+	if spec == nil || spec.PointValue <= 0 {
+		spec = broker.FallbackSymbolSpec(symbol)
+	}
+
 	priceDist := math.Abs(entry - sl)
-	if priceDist <= 0 {
-		return 0.01
+	if priceDist <= 0.000001 || riskAmount <= 0 {
+		return spec.VolumeMin, spec
 	}
 
-	var pips float64
-	var pipVal float64 = 10.0
+	dollarLossPerLot := priceDist * spec.PointValue
+	rawLot := (riskAmount / dollarLossPerLot) + 1e-8
 
-	if isGold {
-		pips = priceDist / 0.10
-	} else if isIndex {
-		pips = priceDist / 1.0
-		pipVal = 1.0
-	} else {
-		pips = priceDist / 0.00010
+	step := spec.VolumeStep
+	if step <= 0 {
+		step = 0.01
+	}
+	lot := math.Floor(rawLot/step) * step
+	if spec.VolumeMin > 0 && lot < spec.VolumeMin {
+		lot = spec.VolumeMin
+	}
+	if spec.VolumeMax > 0 && lot > spec.VolumeMax {
+		lot = spec.VolumeMax
 	}
 
-	if pips < 1.0 {
-		pips = 1.0
+	// Max Risk Assertion Gate: if rounded lot overshoots risk budget by > 10%, clamp down by step
+	if lot > spec.VolumeMin && (lot*dollarLossPerLot) > (riskAmount*1.10) {
+		lot = math.Floor((riskAmount/dollarLossPerLot)/step) * step
 	}
 
-	lot := riskAmount / (pips * pipVal)
-	lot = math.Round(lot*100) / 100
-	minLot := 0.01
-	if isIndex {
-		minLot = 0.10
-		lot = math.Floor(lot*10) / 10.0
-	}
-	if lot < minLot {
-		return minLot
-	}
-	if lot > 20.0 {
-		return 20.0
-	}
-	return lot
+	return math.Round(lot*100) / 100.0, spec
 }
 
 func getSymbolDisplay(sym string) (string, string) {
@@ -365,64 +362,64 @@ func main() {
 					continue
 				}
 
-			isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
-			tol := 0.50
-			if !isGold {
-				tol = 0.00050
-			}
-
-			hitTP := false
-			hitSL := false
-
-			if pos.Direction == "BUY" {
-				if exitPrice >= (pos.TakeProfit - tol) {
-					hitTP = true
-				} else if exitPrice <= (pos.StopLoss + tol) {
-					hitSL = true
+				isGold := strings.Contains(pos.Symbol, "XAU") || strings.Contains(pos.Symbol, "GOLD")
+				tol := 0.50
+				if !isGold {
+					tol = 0.00050
 				}
-			} else {
-				if exitPrice <= (pos.TakeProfit + tol) {
-					hitTP = true
-				} else if exitPrice >= (pos.StopLoss - tol) {
-					hitSL = true
-				}
-			}
 
-			if !hitTP && !hitSL {
-				if actualPnL > 0 {
-					hitTP = true
+				hitTP := false
+				hitSL := false
+
+				if pos.Direction == "BUY" {
+					if exitPrice >= (pos.TakeProfit - tol) {
+						hitTP = true
+					} else if exitPrice <= (pos.StopLoss + tol) {
+						hitSL = true
+					}
 				} else {
-					hitSL = true
+					if exitPrice <= (pos.TakeProfit + tol) {
+						hitTP = true
+					} else if exitPrice >= (pos.StopLoss - tol) {
+						hitSL = true
+					}
 				}
+
+				if !hitTP && !hitSL {
+					if actualPnL > 0 {
+						hitTP = true
+					} else {
+						hitSL = true
+					}
+				}
+
+				status := "CLOSED_SL"
+				outcomeR := -1.0
+				if hitTP {
+					status = "CLOSED_TP"
+					outcomeR = pos.RiskReward
+				}
+
+				now := time.Now().UTC()
+				db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
+					"status":      status,
+					"exit_price":  exitPrice,
+					"profit_loss": actualPnL,
+					"outcome_r":   outcomeR,
+					"closed_at":   now,
+				})
+
+				pos.Status = status
+				pos.ExitPrice = exitPrice
+				pos.ProfitLoss = actualPnL
+				pos.OutcomeR = outcomeR
+				pos.ClosedAt = &now
+
+				// Run post-trade self learning evaluation
+				_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 			}
-
-			status := "CLOSED_SL"
-			outcomeR := -1.0
-			if hitTP {
-				status = "CLOSED_TP"
-				outcomeR = pos.RiskReward
-			}
-
-			now := time.Now().UTC()
-			db.Model(&model.Position{}).Where("id = ?", pos.ID).Updates(map[string]interface{}{
-				"status":      status,
-				"exit_price":  exitPrice,
-				"profit_loss": actualPnL,
-				"outcome_r":   outcomeR,
-				"closed_at":   now,
-			})
-
-			pos.Status = status
-			pos.ExitPrice = exitPrice
-			pos.ProfitLoss = actualPnL
-			pos.OutcomeR = outcomeR
-			pos.ClosedAt = &now
-
-			// Run post-trade self learning evaluation
-			_, _ = evalService.EvaluateClosedTrade(ctx, &pos)
 		}
 	}
-}
 
 	// 2.1 Ensure all closed positions have evaluations created
 	_, _ = evalService.EvaluateAllClosedPositions(ctx)
@@ -601,7 +598,7 @@ func main() {
 						equity = acc.Balance
 					}
 					riskDollars := equity * (riskPercent / 100.0)
-					lot := calcLot(sym, entryPrice, sl, riskDollars)
+					lot, _ := calcLot(ctx, tradeBroker, sym, entryPrice, sl, riskDollars)
 
 					setupID := fmt.Sprintf("ILA-%s-%s-%s-%s", sym, ep.HTF, ep.LTF, time.Now().Format("200601021504"))
 
