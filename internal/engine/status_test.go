@@ -55,8 +55,11 @@ func TestMapILA3MengabaikanStatusTakDikenal(t *testing.T) {
 
 func TestMenungguLTF(t *testing.T) {
 	ya := []signal.Status{
+		signal.WaitHTFCandleClose,
 		signal.WaitLTFCISD,
+		signal.WaitILA3MTFReversal,
 		signal.WaitILA3LTFCISD1,
+		signal.WaitILA3MTFFVGRetr,
 		signal.WaitILA3LTFCISD2,
 	}
 	for _, s := range ya {

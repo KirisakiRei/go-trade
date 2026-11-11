@@ -70,7 +70,9 @@ func mapILA3Status(s string) signal.Status {
 // yang diperlukan.
 func menungguLTF(s signal.Status) bool {
 	switch s {
-	case signal.WaitLTFCISD, signal.WaitILA3LTFCISD1, signal.WaitILA3LTFCISD2:
+	case signal.WaitHTFCandleClose, signal.WaitLTFCISD,
+		signal.WaitILA3MTFReversal, signal.WaitILA3LTFCISD1,
+		signal.WaitILA3MTFFVGRetr, signal.WaitILA3LTFCISD2:
 		return true
 	default:
 		return false
