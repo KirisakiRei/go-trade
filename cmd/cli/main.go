@@ -313,7 +313,11 @@ func main() {
 	} else if setup.HTFSweep != nil {
 		fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
 		if setup.HTFSweep.FVG != nil {
-			fmt.Printf("  └ Area FVG Terakhir: %.2f - %.2f (%s)\n", setup.HTFSweep.FVG.Bottom, setup.HTFSweep.FVG.Top, setup.HTFSweep.FVG.Type)
+			fvgFmt := "%.2f - %.2f"
+			if setup.HTFSweep.FVG.Bottom < 50.0 {
+				fvgFmt = "%.5f - %.5f"
+			}
+			fmt.Printf("  └ Area FVG Terakhir: "+fvgFmt+" (%s)\n", setup.HTFSweep.FVG.Bottom, setup.HTFSweep.FVG.Top, setup.HTFSweep.FVG.Type)
 		}
 		fmt.Printf("  └ Detail           : %s\n\n", setup.HTFSweep.Details)
 	} else {
