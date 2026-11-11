@@ -391,6 +391,16 @@ func isCandleClosedSince(tf string, lastEval, now time.Time, buffer time.Duratio
 	return lastEval.Before(tReady)
 }
 
+var nyLocation *time.Location
+
+func init() {
+	var err error
+	nyLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLocation = time.FixedZone("EST", -5*3600)
+	}
+}
+
 func latestCandleClose(tf string, t time.Time) time.Time {
 	t = t.UTC()
 	switch tf {
@@ -401,9 +411,20 @@ func latestCandleClose(tf string, t time.Time) time.Time {
 	case "H1", "1H", "1h":
 		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
 	case "H4", "4H", "4h":
-		return time.Date(t.Year(), t.Month(), t.Day(), (t.Hour()/4)*4, 0, 0, 0, time.UTC)
+		tInNY := t.In(nyLocation)
+		nyHour := tInNY.Hour()
+		closeHour := nyHour - ((nyHour - 1 + 24) % 4)
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), closeHour, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
 	case "D", "D1", "1D", "1d":
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		tInNY := t.In(nyLocation)
+		closeDay := tInNY.Day()
+		if tInNY.Hour() < 17 {
+			tInNY = tInNY.AddDate(0, 0, -1)
+			closeDay = tInNY.Day()
+		}
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), closeDay, 17, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
 	case "W", "W1", "1W", "1w":
 		days := (int(t.Weekday()) + 6) % 7
 		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)

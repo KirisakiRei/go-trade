@@ -378,8 +378,8 @@ func TestJadwalLilinCloseDriven(t *testing.T) {
 		t.Fatalf("sebelum candle H4 tutup evaluasi harus dilewati, got count=%d", count)
 	}
 
-	// Scan 3: Saat candle H4 tutup (12:00:04 UTC) -> evaluasi jalan
-	jamH4Tutup := time.Date(2026, 11, 2, 12, 0, 4, 0, time.UTC)
+	// Scan 3: Saat candle H4 tutup (14:00:04 UTC / 09:00 NY) -> evaluasi jalan
+	jamH4Tutup := time.Date(2026, 11, 2, 14, 0, 4, 0, time.UTC)
 	pub.WithClock(func() time.Time { return jamH4Tutup })
 	pub.Scan(context.Background())
 	if count != 2 {
