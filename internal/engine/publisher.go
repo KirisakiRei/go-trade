@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,13 @@ type Publisher struct {
 
 	pakaiJadwalLilin bool
 	bufferLilin      time.Duration
+
+	// evaluasiTerakhir mencatat kapan tabel evaluasi terakhir dicatat, supaya
+	// log denyut tetap ringkas (satu baris per menit) walau scan jalan tiap
+	// beberapa detik. Tanpa denyut, engine yang diam tidak bisa dibedakan
+	// antara "tidak ada setup" dan "tidak dievaluasi sama sekali".
+	evaluasiTerakhir time.Time
+	evaluasiMenit    int
 
 	// feed memilih sumber candle per simbol. Nil berarti engine memakai
 	// pemetaan bawaan penyedia data (perilaku lama).
@@ -136,7 +144,41 @@ func (p *Publisher) Scan(ctx context.Context) {
 		}
 	}
 
+	p.catatDenyut(now, symbols)
 	p.expireAll(now)
+}
+
+// catatDenyut menulis satu baris ringkasan per menit: simbol yang dipantau,
+// pasangan timeframe yang benar-benar dievaluasi, dan jumlah slot jatuh tempo.
+//
+// Ini satu-satunya cara membedakan "radar tidak ada setup" dari "radar tidak
+// dievaluasi". Isinya sengaja ringkas agar tidak menenggelamkan log sinyal.
+func (p *Publisher) catatDenyut(now time.Time, symbols []string) {
+	menit := int(now.Unix() / 60)
+	p.mu.Lock()
+	if p.evaluasiMenit == menit {
+		p.mu.Unlock()
+		return
+	}
+	p.evaluasiMenit = menit
+	p.mu.Unlock()
+
+	total := 0
+	rinci := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		pairs := p.pairsFor(symbol)
+		total += len(pairs)
+		label := fmt.Sprintf("%s:%d", symbol, len(pairs))
+		if len(pairs) == 0 {
+			// Nol pasangan berarti permintaan pelanggan semuanya di luar
+			// aturan evaluator: slot tidak akan pernah dihitung.
+			label += "(ditolak)"
+		}
+		rinci = append(rinci, label)
+	}
+
+	p.log.Info("radar dievaluasi",
+		"symbols", len(symbols), "slots", total, "rinci", strings.Join(rinci, " "))
 }
 
 // pairsFor menentukan pasangan timeframe yang dihitung untuk satu simbol.
