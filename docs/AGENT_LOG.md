@@ -242,6 +242,22 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-12] PERBAIKAN — Penelusuran Origin CISD Bersambung Lintas Lilin HTF (Anti-Premature Cutoff)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Penelusuran Origin Deretan Lilin Lawan Lintas Batas Lilin HTF (`pkg/ila/evaluator.go`):**
+   - **Akar Masalah:** Di fungsi `DetectDynamicCISD`, penelusuran mundur deretan candle lawan (*consecutive opposing leg*) sebelumnya dipotong kaku oleh kondisi `candles[curr].Timestamp.Before(afterTime)`. Hal ini memicu entri prematur: pada kasus EURUSD H4-M15 tadi pagi, deretan candle bullish beruntun yang menuju puncak ekstrim jam 09:15 NY (High 1.10985) sebenarnya berawal dari candle 08:15 NY (Open 1.10766). Namun karena dipotong paksa di batas pembuka Candle 5 (09:00 NY), engine menganggap candle 09:00 NY (Open 1.10891) sebagai origin palsu, sehingga candle 09:30 NY (Close 1.10825) sudah diklaim tembus CISD dan membuka posisi SELL di 09:45 NY.
+   - **Perbaikan Deterministik:** Deretan candle lawan yang bersambung langsung tanpa terputus diizinkan berawal dari candle sebelumnya (di dalam siklus sweep Candle 4 HTF, `Timestamp >= sweepCandle.Timestamp`). Origin sejati tetap diakui pada awal deretan utuh (08:15 NY Open 1.10766).
+   - **Hasil Validasi:** Candle 09:30 NY (Close 1.10825) belum memicu CISD karena belum menembus 1.10766. Penembusan CISD resmi terjadi saat candle 09:45 NY ditutup di Close 1.10744, memicu entri tepat di pembukaan candle 10:00 NY sesuai aturan baku ILA 2.0.
+2. **Unit Test Pengunci:**
+   - Ditambahkan `TestCISDOriginCanFormInPriorCandleRun` di `pkg/ila/evaluator_test.go` yang mereproduksi persis struktur EURUSD M15 (08:15 s.d. 10:00 NY) dan memvalidasi bahwa 09:30 NY belum memicu CISD, sedangkan 09:45 NY sah memicu CISD.
+
+#### Verifikasi
+- `go test -v -count=1 ./pkg/ila/...` PASS 100% (8/8 test).
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
