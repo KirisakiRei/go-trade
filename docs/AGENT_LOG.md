@@ -264,6 +264,36 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-12] REVIEW — Double FVG & DOL Breached digabung dengan koreksi pengaman
+- **Pelaku:** Claude
+- **Tipe:** REVIEW / PERBAIKAN
+- **Status:** 🟢 SELESAI — digabung ke `develop`
+- **Ringkasan review atas entri Hermes [2026-11-12]:**
+  - **Klaim "TP dikunci 1:2.00 saat DOL breached" — TERVERIFIKASI.** Blok `dolBreached` di `EvaluateILA` memang menghitung ulang `TakeProfit = Entry ± (2.00 × slDist)`, jadi menghapus guard `candles[post].Low <= ssl` tidak menghasilkan R:R negatif.
+  - **Koreksi 1 — syarat Double FVG dipersempit.** Deteksi awal membandingkan `activeFVGs[len-2]`, padahal daftar itu sudah terfilter `!Mitigated`, sehingga FVG sebelumnya yang termitigasi terlewat dan pembanding bisa melompat ke FVG yang jauh lebih tua. Pembanding kini memakai `fvgs` kronologis (helper `indexOfFVG`) dengan syarat ketat: tipe sama, FVG sebelumnya **masih aktif**, dan pembentuk benar-benar bersambung (`Candle1Index == prev.Candle3Index` atau jarak Candle2 tepat 1).
+  - **Koreksi 2 — TP fase `WAIT_LTF_CISD` ikut di-clamp.** Clamping 1:2.00 sebelumnya hanya berjalan di jalur `READY_TO_ENTRY`. Di fase WAIT, `TakeProfit = sweep.TargetDOL` mentah; setelah guard DOL dihapus, panel bisa menampilkan TP yang sudah terlewati. Sekarang TP fase WAIT ikut dikunci 1:2.00 diukur dari close Candle 4.
+  - **Pengujian yang sebelumnya tidak ada.** PR asli tidak membawa satu pun test. Ditambahkan: `TestDoubleFVGAllowsCandle3Sweep`, `TestDoubleFVGWithMitigatedNeighbourRejected`, `TestSingleFVGStillRejectsCandle3Sweep`, `TestDOLBreachedDoesNotInvalidateSweep`. Semuanya sudah diverifikasi **gagal** bila fitur/koreksi dicabut, jadi benar-benar menjaga perilaku.
+  - **Verifikasi akhir:** `go build ./...`, `go vet ./...`, dan `go test ./...` seluruh paket PASS.
+- **File / Bagian Terdampak:**
+  - `pkg/ila/evaluator.go`
+  - `pkg/ila/evaluator_test.go`
+- **Catatan:** Branch `hermes` (bukan `fix/ila-double-fvg-and-dol-breached`) **tidak disentuh** — itu wilayah kerja Hermes.
+
+### [2026-11-12] PERBAIKAN — Dukungan Dinamis Double/Stacked FVG & Penyelarasan DOL Breached
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Dukungan Double / Stacked FVG (`pkg/ila/evaluator.go`):**
+   - Menambahkan deteksi formasi FVG beruntun (*consecutive displacement* pada arah yang sama).
+   - Pada kondisi Double FVG, batas pembentuk FVG kedua (Candle 3) sah disapu oleh lilin berikutnya saat harga melakukan retrace masuk ke area FVG lilin sebelumnya. Blokir kaku `k-1 <= Candle3Index` dilonggarkan secara dinamis hanya untuk kasus Double FVG.
+   - Contoh kasus: XAUUSD H4 lilin 18:00 NY menyapu ekor lilin 14:00 NY (Candle 3 FVG kedua) di dalam rentang FVG 10:00 NY (3990.99 – 4010.86), mengonfirmasi setup Bearish ILA 2.0 yang presisi.
+2. **Penyelarasan Aturan DOL Breached:**
+   - Memperbaiki validasi pembatalan (*invalidation*) sweep: penembusan level SSL/BSL sebelum entry tidak lagi membatalkan siklus sweep. Sesuai aturan baku ILA (Skenario 3), kondisi DOL Breached tetap sah dengan target Take Profit otomatis dikunci ke batas dasar 1:2.00 R:R.
+3. **Verifikasi:**
+   - `go test -count=1 ./pkg/ila/...` PASS 100%.
+
 ### [2026-11-11] PERBAIKAN — Penegakan Aturan Baku Wick Sweep vs Body Break & Presisi Desimal Forex
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN

@@ -219,3 +219,105 @@ func TestZombieSweepRejected(t *testing.T) {
 		t.Fatalf("sweep lama (> 3 candle lalu) seharusnya ditolak sebagai zombie!")
 	}
 }
+
+// TestDoubleFVGAllowsCandle3Sweep memvalidasi aturan Double / Stacked FVG:
+// pada dua displacement bearish yang bersambung, Candle 3 milik FVG terbaru SAH
+// disapu oleh candle berikutnya saat harga retrace masuk ke area FVG.
+// Tanpa dukungan Double FVG, kasus ini ditolak oleh guard Candle 3.
+func TestDoubleFVGAllowsCandle3Sweep(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// Dua bearish FVG bersambung (Candle1 FVG-B == Candle3 FVG-A).
+	// Sweep terjadi TEPAT pada Candle 3 FVG terbaru (k-1 == Candle3Index),
+	// satu-satunya kondisi yang diloloskan oleh aturan Double FVG.
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-5 * time.Hour), Open: 4200, High: 4205, Low: 4196, Close: 4200, IsClosed: true}, // C1 FVG-A (Low 4196)
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4200, High: 4200, Low: 4150, Close: 4155, IsClosed: true}, // C2 FVG-A displacement turun
+		{Timestamp: now.Add(-3 * time.Hour), Open: 4155, High: 4178, Low: 4180, Close: 4182, IsClosed: true}, // C3 FVG-A (High 4178) -> FVG-A: 4178-4196
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4182, High: 4182, Low: 4130, Close: 4135, IsClosed: true}, // C2 FVG-B displacement turun
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4135, High: 4170, Low: 4172, Close: 4175, IsClosed: true}, // C3 FVG-B (High 4170) -> FVG-B: 4170-4180
+		// ck menyapu High Candle 3 FVG-B (4179 > 4170) dan ditutup kembali di bawahnya (4169 <= 4170).
+		{Timestamp: now.Add(-30 * time.Minute), Open: 4175, High: 4179, Low: 4168, Close: 4169, IsClosed: true},
+		{Timestamp: now, Open: 4169, High: 4172, Low: 4167, Close: 4170, IsClosed: false},
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("FAILED: Double FVG seharusnya mengizinkan sweep terhadap Candle 3 FVG terbaru!")
+	}
+	if sweep.Direction != "BEARISH" {
+		t.Fatalf("arah sweep seharusnya BEARISH, dapat %s", sweep.Direction)
+	}
+}
+
+// TestDoubleFVGWithMitigatedNeighbourRejected memastikan aturan Double FVG hanya aktif
+// bila FVG sebelumnya masih aktif (belum termitigasi) dan pembentuknya bersambung.
+// FVG sebelumnya yang sudah termitigasi berarti harganya sudah melewati area tersebut,
+// sehingga Candle 3-nya tidak boleh dipakai sebagai alasan meloloskan sweep.
+func TestDoubleFVGWithMitigatedNeighbourRejected(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// FVG-A terbentuk lalu TERMITIGASI (candle idx3 menembus atap 4296),
+	// setelah itu FVG-B terbentuk dan Candle 3-nya disapu.
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4300, High: 4305, Low: 4296, Close: 4300, IsClosed: true}, // C1 FVG-A (Low 4296)
+		{Timestamp: now.Add(-7 * time.Hour), Open: 4300, High: 4300, Low: 4250, Close: 4255, IsClosed: true}, // C2 FVG-A displacement turun
+		{Timestamp: now.Add(-6 * time.Hour), Open: 4255, High: 4270, Low: 4260, Close: 4265, IsClosed: true}, // C3 FVG-A (High 4270) -> FVG-A: 4270-4296
+		{Timestamp: now.Add(-5 * time.Hour), Open: 4265, High: 4300, Low: 4264, Close: 4298, IsClosed: true}, // menembus atap FVG-A -> FVG-A TERMITIGASI
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4298, High: 4298, Low: 4240, Close: 4245, IsClosed: true}, // C2 FVG-B displacement turun
+		{Timestamp: now.Add(-3 * time.Hour), Open: 4245, High: 4262, Low: 4250, Close: 4255, IsClosed: true}, // C3 FVG-B -> FVG-B: 4262-4264
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4258, High: 4260, Low: 4256, Close: 4258, IsClosed: true}, // cPrev parkir di FVG-B
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4258, High: 4262, Low: 4255, Close: 4256, IsClosed: true}, // ck menyapu Candle 3 FVG-B
+		{Timestamp: now, Open: 4256, High: 4259, Low: 4253, Close: 4254, IsClosed: false},
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep != nil && sweep.Detected {
+		t.Fatalf("FAILED: FVG sebelumnya yang sudah termitigasi tidak boleh memicu aturan Double FVG!")
+	}
+}
+
+// TestSingleFVGStillRejectsCandle3Sweep adalah penjaga regresi untuk perbaikan
+// Double FVG: FVG tunggal tanpa pasangan bersambung TETAP menolak sweep Candle 3.
+func TestSingleFVGStillRejectsCandle3Sweep(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
+		{Timestamp: now.Add(-3 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212)
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true}, // menyapu C3 tanpa pasangan Double FVG
+		{Timestamp: now, Open: 4180, High: 4215, Low: 4175, Close: 4190, IsClosed: false},
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep != nil && sweep.Detected {
+		t.Fatalf("FAILED: FVG tunggal tetap harus menolak sweep terhadap Candle 3!")
+	}
+}
+
+// TestDOLBreachedDoesNotInvalidateSweep memvalidasi Skenario 3:
+// harga yang menembus DOL (SSL) setelah sweep tidak boleh membatalkan siklus sweep.
+func TestDOLBreachedDoesNotInvalidateSweep(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-6 * time.Hour), Open: 4100, High: 4105, Low: 4098, Close: 4102, IsClosed: true},   // C1 (Low=4098)
+		{Timestamp: now.Add(-5 * time.Hour), Open: 4102, High: 4102, Low: 4070, Close: 4075, IsClosed: true},   // C2 displacement turun
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4075, High: 4096, Low: 4092, Close: 4094, IsClosed: true},   // C3 (High=4096) -> Bearish FVG 4096-4098
+		{Timestamp: now.Add(-3 * time.Hour), Open: 4094, High: 4097, Low: 4093, Close: 4095, IsClosed: true},   // cPrev (High=4097, parkir di FVG)
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4095, High: 4097.5, Low: 4092, Close: 4093, IsClosed: true}, // ck sweep wick, close di bawah cPrev.High
+		// Candle berikutnya menembus jauh ke bawah DOL (SSL = bottom FVG 4096 => di bawahnya).
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4093, High: 4094, Low: 4040, Close: 4042, IsClosed: true},
+		{Timestamp: now, Open: 4042, High: 4045, Low: 4035, Close: 4038, IsClosed: false},
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("FAILED: penembusan DOL tidak boleh membatalkan sweep (Skenario 3 DOL Breached)!")
+	}
+}
