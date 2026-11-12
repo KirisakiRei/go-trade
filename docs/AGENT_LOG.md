@@ -242,21 +242,26 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
-### [2026-11-12] PERBAIKAN — Penegakan Mitigasi FVG Berbasis Body Close (Anti-False Mitigation by Wick)
+### [2026-11-12] PERBAIKAN — Penegakan Mitigasi FVG dengan Toleransi Spread (Anti-False Mitigation by Wick)
 - **Pelaku:** Hermes
 - **Tipe:** PERBAIKAN
 - **Status:** 🟢 SELESAI
 
 #### Ringkasan
-1. **Mitigasi FVG Wajib Berbasis Body Close (`pkg/ila/evaluator.go`):**
-   - **Akar Masalah:** Sebelumnya, fungsi `FindFVGs` dan `DetectHTFIlaSweep` membatalkan/menghanguskan FVG jika ada candle yang menusuk hingga melewati batas luar FVG (`High >= Top` untuk Bearish atau `Low <= Bottom` untuk Bullish). Hal ini memicu false mitigation: pada kasus XAUUSD H1 tadi pagi, candle sweep jam 06:00 NY menusuk ke 3955.51 (hanya 38 sen di atas atap FVG 3955.13) dan ditutup jatuh di 3944.32 (rejection wick kuat). Karena ekor menusuk 38 sen tersebut, FVG jam 03:00 NY langsung dibunuh dan dianggap hangus, sehingga setup sweep dan CISD M15 jam 07:10 NY tidak tertangkap engine.
-   - **Perbaikan Deterministik:** Celah FVG kini **hanya termitigasi/hangus jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG** (`Close > Top` untuk Bearish, atau `Close < Bottom` untuk Bullish).
-   - Penusukan ekor (wick) tanpa penutupan body diakui sebagai **rejection wick / liquidity sweep sah**, dan FVG tetap hidup aktif.
+1. **Mitigasi FVG dengan Toleransi Spread (`pkg/ila/evaluator.go`):**
+   - **Aturan Baku:** Celah FVG dinyatakan termitigasi/hangus jika:
+     1. Ada candle closed resmi dengan BODY menembus batas luar FVG (`Close > Top` untuk Bearish, atau `Close < Bottom` untuk Bullish), ATAU
+     2. Ada candle dengan ekor (wick) yang menutup penuh FVG melampaui toleransi spread/noise broker (`High > Top + tol` untuk Bearish, atau `Low < Bottom - tol` untuk Bullish).
+   - **Toleransi Dinamis (`getFVGTolerance`):**
+     - Emas (XAUUSD): `$0.50` (50 sen)
+     - Indeks (USTEC/NAS100): `2.00` poin
+     - Forex (EURUSD): `0.00010` (1 pip)
+   - Penusukan ekor dalam batas toleransi (seperti kasus 38 sen XAUUSD H1 jam 06:00 NY) dengan body tertahan kuat di dalam/bawah FVG diakui sebagai **rejection wick / liquidity sweep sah**, dan FVG tetap hidup aktif.
 2. **Penyelarasan Evaluator Sweep & Siklus:**
-   - Menghapus blokir prematur `ck.High >= latestFVG.Top` pada lilin sweep, dan menggantinya dengan validasi body close `ck.Close <= latestFVG.Top` serta `ck.Close <= cPrev.High`.
-   - Lilin setelah sweep (`post`) hanya membatalkan siklus jika menembus ekor sweep (`High > ck.High`) atau ditutup tembus body di atas FVG (`Close > Top`).
+   - Menghapus blokir kaku pada lilin sweep, dan menggantinya dengan validasi body close `ck.Close <= latestFVG.Top` serta `ck.Close <= cPrev.High`.
+   - Lilin setelah sweep (`post`) membatalkan siklus jika menembus ekor sweep (`High > ck.High`) atau menembus FVG melebihi toleransi (`Close > Top || High > Top + tol`).
 3. **Unit Test Pengunci:**
-   - Ditambahkan `TestWickPierceDoesNotMitigateFVG` di `pkg/ila/evaluator_test.go` untuk memvalidasi bahwa tusukan ekor ke luar FVG tetap menghasilkan FVG aktif dan sweep sah selama body ditutup di dalam/bawah FVG.
+   - Diperbarui `TestWickPierceDoesNotMitigateFVG` di `pkg/ila/evaluator_test.go` untuk memvalidasi kasus dalam toleransi (38 sen <= 50 sen) tetap sah, dan kasus tembus jauh ($2.00 > 50 sen) termitigasi penuh.
 
 #### Verifikasi
 - `go test -v -count=1 ./pkg/ila/...` PASS 100%.
