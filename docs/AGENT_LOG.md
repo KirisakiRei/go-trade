@@ -242,6 +242,21 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-12] PERBAIKAN — Dukungan Dinamis Double/Stacked FVG & Penyelarasan DOL Breached
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Dukungan Double / Stacked FVG (`pkg/ila/evaluator.go`):**
+   - Menambahkan deteksi formasi FVG beruntun (*consecutive displacement* pada arah yang sama).
+   - Pada kondisi Double FVG, batas pembentuk FVG kedua (Candle 3) sah disapu oleh lilin berikutnya saat harga melakukan retrace masuk ke area FVG lilin sebelumnya. Blokir kaku `k-1 <= Candle3Index` dilonggarkan secara dinamis hanya untuk kasus Double FVG.
+   - Contoh kasus: XAUUSD H4 lilin 18:00 NY menyapu ekor lilin 14:00 NY (Candle 3 FVG kedua) di dalam rentang FVG 10:00 NY (3990.99 – 4010.86), mengonfirmasi setup Bearish ILA 2.0 yang presisi.
+2. **Penyelarasan Aturan DOL Breached:**
+   - Memperbaiki validasi pembatalan (*invalidation*) sweep: penembusan level SSL/BSL sebelum entry tidak lagi membatalkan siklus sweep. Sesuai aturan baku ILA (Skenario 3), kondisi DOL Breached tetap sah dengan target Take Profit otomatis dikunci ke batas dasar 1:2.00 R:R.
+3. **Verifikasi:**
+   - `go test -count=1 ./pkg/ila/...` PASS 100%.
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN

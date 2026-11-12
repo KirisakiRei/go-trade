@@ -36,6 +36,13 @@ func formatCandleDateTime(t time.Time) string {
 	return t.UTC().Add(-5 * time.Hour).Format("02 Jan 15:04 NY")
 }
 
+func formatILAVal(val float64) string {
+	if val < 50.0 {
+		return fmt.Sprintf("%.5f", val)
+	}
+	return fmt.Sprintf("%.2f", val)
+}
+
 func NewEvaluator() *Evaluator {
 	return &Evaluator{}
 }
@@ -138,6 +145,19 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 	// Kunci murni pada FVG aktif TERBARU
 	latestFVG := activeFVGs[len(activeFVGs)-1]
 
+	// Deteksi apakah terjadi Double / Stacked FVG (displacements berturut-turut pada arah yang sama).
+	// Pada kondisi Double FVG, Candle 3 dari FVG terbaru adalah batas/lantai FVG yang sah disapu
+	// oleh candle berikutnya saat melakukan retracement masuk ke area FVG.
+	isDoubleFVG := false
+	if len(activeFVGs) >= 2 {
+		prevFVG := activeFVGs[len(activeFVGs)-2]
+		if prevFVG.Type == latestFVG.Type {
+			if latestFVG.Candle2Index <= prevFVG.Candle2Index+2 || latestFVG.Candle1Index == prevFVG.Candle2Index {
+				isDoubleFVG = true
+			}
+		}
+	}
+
 	for k := n - 1; k > latestFVG.Candle2Index; k-- {
 		// 1. PENCEGAHAN SWEEP ZOMBIE:
 		// Sweep hanya relevan jika terjadi di:
@@ -150,10 +170,13 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		}
 
 		// 2. PENCEGAHAN SWEEP PALSU TERHADAP CANDLE 3:
-		// Candle pembentuk FVG adalah Candle 1, 2, dan 3 (latestFVG.Candle3Index).
-		// Candle yang disapu (cPrev = candles[k-1]) TIDAK BOLEH Candle 3 atau sebelumnya.
-		// Minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
-		if k-1 <= latestFVG.Candle3Index {
+		// Pada Single FVG biasa, minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
+		// Namun pada Double FVG (Consecutive Displacement), Candle 3 pembatas FVG terbaru SAH disapu
+		// oleh candle berikutnya saat harga retrace masuk ke FVG.
+		if k-1 < latestFVG.Candle3Index {
+			continue
+		}
+		if k-1 == latestFVG.Candle3Index && !isDoubleFVG {
 			continue
 		}
 
@@ -174,7 +197,8 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		// - ck enters FVG: ck.High >= latestFVG.Bottom
 		// - ck sweeps previous ADJACENT wick inside FVG: ck.High > cPrev.High
 		// - ck does NOT close above FVG top (displacement holds): ck.Close <= latestFVG.Top
-		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top {
+		// - WICK SWEEP ONLY (NOT BODY BREAKOUT): ck body must close AT OR BELOW cPrev.High: ck.Close <= cPrev.High
+		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top && ck.Close <= cPrev.High {
 			ssl := latestFVG.Bottom
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].Low < ssl {
@@ -186,10 +210,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// Sweep tetap sah dan aktif selama:
 			// 1. Belum ada candle berikutnya yang menembus ekor sweep (ck.High)
 			// 2. FVG belum tertutup penuh (candles[post].High >= latestFVG.Top)
-			// 3. Target DOL belum tersentuh/tertembus sebelum entry (candles[post].Low <= ssl)
+			// Catatan: Jika harga sudah menembus target SSL lebih dulu sebelum CISD terbentuk,
+			// setup TIDAK dibatalkan, melainkan diberlakukan "Skenario 3 DOL Breached" (kunci TP ke 1:2.00 R:R).
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top || candles[post].Low <= ssl {
+				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top {
 					invalidated = true
 					break
 				}
@@ -225,8 +250,8 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 				SweepTime:        ck.Timestamp,
 				StopLoss:         ck.High,
 				TargetDOL:        ssl,
-				Details: fmt.Sprintf("Candle %s masuk ke Bearish FVG Terakhir (%.2f - %.2f) dan menyapu High wick candle sebelumnya (%.2f > %.2f). Target DOL: %.2f (SSL).",
-					formatCandleDateTime(ck.Timestamp), latestFVG.Bottom, latestFVG.Top, ck.High, cPrev.High, ssl),
+				Details: fmt.Sprintf("Candle %s masuk ke Bearish FVG Terakhir (%s - %s) dan menyapu High wick candle sebelumnya (%s > %s). Target DOL: %s (SSL).",
+					formatCandleDateTime(ck.Timestamp), formatILAVal(latestFVG.Bottom), formatILAVal(latestFVG.Top), formatILAVal(ck.High), formatILAVal(cPrev.High), formatILAVal(ssl)),
 			}
 		}
 
@@ -236,7 +261,8 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		// - ck enters FVG: ck.Low <= latestFVG.Top
 		// - ck sweeps previous wick low inside FVG: ck.Low < cPrev.Low
 		// - ck does NOT close below FVG bottom: ck.Close >= latestFVG.Bottom
-		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom {
+		// - WICK SWEEP ONLY (NOT BODY BREAKDOWN): ck body must close AT OR ABOVE cPrev.Low: ck.Close >= cPrev.Low
+		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom && ck.Close >= cPrev.Low {
 			bsl := latestFVG.Top
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].High > bsl {
@@ -247,7 +273,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom || candles[post].High >= bsl {
+				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom {
 					invalidated = true
 					break
 				}
@@ -283,18 +309,18 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 				SweepTime:        ck.Timestamp,
 				StopLoss:         ck.Low,
 				TargetDOL:        bsl,
-				Details: fmt.Sprintf("Candle %s masuk ke Bullish FVG Terakhir (%.2f - %.2f) dan menyapu Low wick candle sebelumnya (%.2f < %.2f). Target DOL: %.2f (BSL).",
-					formatCandleDateTime(ck.Timestamp), latestFVG.Bottom, latestFVG.Top, ck.Low, cPrev.Low, bsl),
+				Details: fmt.Sprintf("Candle %s masuk ke Bullish FVG Terakhir (%s - %s) dan menyapu Low wick candle sebelumnya (%s < %s). Target DOL: %s (BSL).",
+					formatCandleDateTime(ck.Timestamp), formatILAVal(latestFVG.Bottom), formatILAVal(latestFVG.Top), formatILAVal(ck.Low), formatILAVal(cPrev.Low), formatILAVal(bsl)),
 			}
 		}
 	}
 
 	// Jika belum ada sweep yang terbentuk, gunakan latestFVG sebagai acuan arah
 	dirStr := "BEARISH"
-	detailStr := fmt.Sprintf("FVG terakhir adalah Bearish (%.2f - %.2f). Menunggu candle masuk dan menyapu High wick candle sebelumnya.", latestFVG.Bottom, latestFVG.Top)
+	detailStr := fmt.Sprintf("FVG terakhir adalah Bearish (%s - %s). Menunggu candle masuk dan menyapu High wick candle sebelumnya.", formatILAVal(latestFVG.Bottom), formatILAVal(latestFVG.Top))
 	if latestFVG.Type == FVGBullish {
 		dirStr = "BULLISH"
-		detailStr = fmt.Sprintf("FVG terakhir adalah Bullish (%.2f - %.2f). Menunggu candle masuk dan menyapu Low wick candle sebelumnya.", latestFVG.Bottom, latestFVG.Top)
+		detailStr = fmt.Sprintf("FVG terakhir adalah Bullish (%s - %s). Menunggu candle masuk dan menyapu Low wick candle sebelumnya.", formatILAVal(latestFVG.Bottom), formatILAVal(latestFVG.Top))
 	}
 
 	return &HTFSweep{
@@ -392,8 +418,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			RefCandle: *firstBear,
 			CISDLevel: cisdLevel,
 			ExtremeSL: lowestVal,
-			Details: fmt.Sprintf("Origin penurunan di Candle %s (Open %.2f). Menunggu candle ditutup > %.2f by body (SL: %.2f).",
-				formatCandleTime(firstBear.Timestamp), cisdLevel, cisdLevel, lowestVal),
+			Details: fmt.Sprintf("Origin penurunan di Candle %s (Open %s). Menunggu candle ditutup > %s by body (SL: %s).",
+				formatCandleTime(firstBear.Timestamp), formatILAVal(cisdLevel), formatILAVal(cisdLevel), formatILAVal(lowestVal)),
 		}
 
 		// 4. Cari apakah ada candle closed setelah lowestIdx yang menembus cisdLevel by body
@@ -404,8 +430,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 				cisd.BreakCandle = c
 				cisd.BreakTime = c.Timestamp
 				cisd.EntryPrice = c.Close
-				cisd.Details = fmt.Sprintf("Bullish CISD Valid: Candle %s (Close %.2f) resmi menembus origin bearish %s (Open %.2f) by body! SL di %.2f.",
-					formatCandleTime(c.Timestamp), c.Close, formatCandleTime(firstBear.Timestamp), cisdLevel, lowestVal)
+				cisd.Details = fmt.Sprintf("Bullish CISD Valid: Candle %s (Close %s) resmi menembus origin bearish %s (Open %s) by body! SL di %s.",
+					formatCandleTime(c.Timestamp), formatILAVal(c.Close), formatCandleTime(firstBear.Timestamp), formatILAVal(cisdLevel), formatILAVal(lowestVal))
 				return cisd, false
 			}
 		}
@@ -484,8 +510,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			RefCandle: *firstBull,
 			CISDLevel: cisdLevel,
 			ExtremeSL: highestVal,
-			Details: fmt.Sprintf("Origin kenaikan di Candle %s (Open %.2f). Menunggu candle ditutup < %.2f by body (SL: %.2f).",
-				formatCandleTime(firstBull.Timestamp), cisdLevel, cisdLevel, highestVal),
+			Details: fmt.Sprintf("Origin kenaikan di Candle %s (Open %s). Menunggu candle ditutup < %s by body (SL: %s).",
+				formatCandleTime(firstBull.Timestamp), formatILAVal(cisdLevel), formatILAVal(cisdLevel), formatILAVal(highestVal)),
 		}
 
 		// 4. Cari apakah ada candle closed setelah highestIdx yang menembus cisdLevel by body
@@ -496,8 +522,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 				cisd.BreakCandle = c
 				cisd.BreakTime = c.Timestamp
 				cisd.EntryPrice = c.Close
-				cisd.Details = fmt.Sprintf("Bearish CISD Valid: Candle %s (Close %.2f) resmi menembus origin bullish %s (Open %.2f) by body! SL di %.2f.",
-					formatCandleTime(c.Timestamp), c.Close, formatCandleTime(firstBull.Timestamp), cisdLevel, highestVal)
+				cisd.Details = fmt.Sprintf("Bearish CISD Valid: Candle %s (Close %s) resmi menembus origin bullish %s (Open %s) by body! SL di %s.",
+					formatCandleTime(c.Timestamp), formatILAVal(c.Close), formatCandleTime(firstBull.Timestamp), formatILAVal(cisdLevel), formatILAVal(highestVal))
 				return cisd, false
 			}
 		}
@@ -614,8 +640,8 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 			setup.NextAction = fmt.Sprintf("⏳ Level CISD Valid di %s (SL: %s). Menunggu closed candle %s menembus level tersebut by body.", cisdStr, slStr, ltfName)
 			setup.Summary = fmt.Sprintf("HTF %s sweep valid. Menunggu CISD %s di level %s (SL: %s).", htfName, ltfName, cisdStr, slStr)
 		} else {
-			setup.NextAction = fmt.Sprintf("⏳ HTF %s Sweep FVG resmi CLOSED! Saat ini di Candle 5 (SL: %.2f), menunggu pembentukan CISD di %s.", htfName, setup.StopLoss, ltfName)
-			setup.Summary = fmt.Sprintf("Internal Liquidity FVG %s sudah disapu (%s). Target: %.2f. Menunggu CISD di %s.", htfName, sweep.Direction, sweep.TargetDOL, ltfName)
+			setup.NextAction = fmt.Sprintf("⏳ HTF %s Sweep FVG resmi CLOSED! Saat ini di Candle 5 (SL: %s), menunggu pembentukan CISD di %s.", htfName, formatILAVal(setup.StopLoss), ltfName)
+			setup.Summary = fmt.Sprintf("Internal Liquidity FVG %s sudah disapu (%s). Target: %s. Menunggu CISD di %s.", htfName, sweep.Direction, formatILAVal(sweep.TargetDOL), ltfName)
 		}
 		return setup
 	}
