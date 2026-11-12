@@ -81,9 +81,10 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 			}
 
 			// Check if subsequently mitigated by candles k > i
-			// Berdasarkan Rule Opsi C: FVG termitigasi/hangus jika pernah tersentuh penuh (k.High >= fvg.Top atau k.Low <= fvg.Bottom)
+			// Aturan Baku: FVG termitigasi/hangus hanya jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG (Close > Top).
+			// Penusukan ekor (wick) tanpa penutupan body bukanlah penutupan sempurna FVG melainkan liquidity sweep/rejection.
 			for k := i + 1; k < n; k++ {
-				if candles[k].High >= fvg.Top {
+				if candles[k].IsClosed && candles[k].Close > fvg.Top {
 					fvg.Mitigated = true
 					break
 				}
@@ -106,8 +107,9 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 			}
 
 			// Check if subsequently mitigated by candles k > i
+			// Aturan Baku: FVG termitigasi/hangus hanya jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG (Close < Bottom).
 			for k := i + 1; k < n; k++ {
-				if candles[k].Low <= fvg.Bottom {
+				if candles[k].IsClosed && candles[k].Close < fvg.Bottom {
 					fvg.Mitigated = true
 					break
 				}
@@ -183,22 +185,24 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		ck := candles[k]
 		cPrev := candles[k-1] // Bersebelahan langsung (adjacent)
 
-		// 0. Cek apakah FVG sudah terisi/tertutup penuh (100% Fully Filled/Mitigated)
-		if latestFVG.Type == FVGBearish && ck.High >= latestFVG.Top {
-			return nil // Bearish FVG sudah tertutup penuh hingga atap (termitigasi)
+		// 0. Cek apakah FVG sudah tertembus penuh secara BODY (Body Breakout):
+		// FVG hanya dinyatakan hangus jika candle ditutup menembus batas luar FVG.
+		// Penusukan ekor (wick) tanpa penutupan body adalah penolakan/sapuan likuiditas, bukan pembatalan FVG.
+		if latestFVG.Type == FVGBearish && ck.IsClosed && ck.Close > latestFVG.Top {
+			return nil // Bearish FVG sudah tertembus penuh by body
 		}
-		if latestFVG.Type == FVGBullish && ck.Low <= latestFVG.Bottom {
-			return nil // Bullish FVG sudah tertutup penuh hingga dasar (termitigasi)
+		if latestFVG.Type == FVGBullish && ck.IsClosed && ck.Close < latestFVG.Bottom {
+			return nil // Bullish FVG sudah tertembus penuh by body
 		}
 
 		// 1. BEARISH ILA SWEEP:
 		// - latestFVG is Bearish
-		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top
+		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom && cPrev.Close <= latestFVG.Top
 		// - ck enters FVG: ck.High >= latestFVG.Bottom
 		// - ck sweeps previous ADJACENT wick inside FVG: ck.High > cPrev.High
 		// - ck does NOT close above FVG top (displacement holds): ck.Close <= latestFVG.Top
 		// - WICK SWEEP ONLY (NOT BODY BREAKOUT): ck body must close AT OR BELOW cPrev.High: ck.Close <= cPrev.High
-		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top && ck.Close <= cPrev.High {
+		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.Close <= latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top && ck.Close <= cPrev.High {
 			ssl := latestFVG.Bottom
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].Low < ssl {
@@ -209,12 +213,12 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			// Sweep tetap sah dan aktif selama:
 			// 1. Belum ada candle berikutnya yang menembus ekor sweep (ck.High)
-			// 2. FVG belum tertutup penuh (candles[post].High >= latestFVG.Top)
+			// 2. FVG belum tertembus oleh candle yang ditutup by body (candles[post].Close > latestFVG.Top)
 			// Catatan: Jika harga sudah menembus target SSL lebih dulu sebelum CISD terbentuk,
 			// setup TIDAK dibatalkan, melainkan diberlakukan "Skenario 3 DOL Breached" (kunci TP ke 1:2.00 R:R).
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top {
+				if candles[post].High > ck.High || (candles[post].IsClosed && candles[post].Close > latestFVG.Top) {
 					invalidated = true
 					break
 				}
@@ -257,12 +261,12 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 
 		// 2. BULLISH ILA SWEEP:
 		// - latestFVG is Bullish
-		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom
+		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top && cPrev.Close >= latestFVG.Bottom
 		// - ck enters FVG: ck.Low <= latestFVG.Top
 		// - ck sweeps previous wick low inside FVG: ck.Low < cPrev.Low
 		// - ck does NOT close below FVG bottom: ck.Close >= latestFVG.Bottom
 		// - WICK SWEEP ONLY (NOT BODY BREAKDOWN): ck body must close AT OR ABOVE cPrev.Low: ck.Close >= cPrev.Low
-		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom && ck.Close >= cPrev.Low {
+		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Close >= latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom && ck.Close >= cPrev.Low {
 			bsl := latestFVG.Top
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].High > bsl {
@@ -273,7 +277,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom {
+				if candles[post].Low < ck.Low || (candles[post].IsClosed && candles[post].Close < latestFVG.Bottom) {
 					invalidated = true
 					break
 				}

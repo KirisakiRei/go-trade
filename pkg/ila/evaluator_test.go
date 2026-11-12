@@ -219,3 +219,36 @@ func TestZombieSweepRejected(t *testing.T) {
 		t.Fatalf("sweep lama (> 3 candle lalu) seharusnya ditolak sebagai zombie!")
 	}
 }
+
+// TestWickPierceDoesNotMitigateFVG memvalidasi bahwa FVG TIDAK termitigasi hanya karena ekor menusuk melewati batas FVG,
+// melainkan WAJIB ditutup secara body (Close > Top untuk Bearish, atau Close < Bottom untuk Bullish).
+func TestWickPierceDoesNotMitigateFVG(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// Bearish FVG: Top 4240 (C1 Low), Bottom 4212 (C3 High)
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1 (Low=4240)
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212)
+		// Candle A: Masuk FVG (High=4230)
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4230, Low: 4160, Close: 4180, IsClosed: true},
+		// Candle B: Ekor menusuk ke 4242 (> Top 4240!), TAPI Close di 4200 (rejection kuat, body di dalam/bawah FVG)
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4242, Low: 4175, Close: 4200, IsClosed: true},
+		// Candle C: Running
+		{Timestamp: now.Add(0), Open: 4200, High: 4205, Low: 4195, Close: 4202, IsClosed: false},
+	}
+
+	fvgs := eval.FindFVGs(htfCandles)
+	if len(fvgs) == 0 {
+		t.Fatalf("expected FVG to be found")
+	}
+	if fvgs[0].Mitigated {
+		t.Fatalf("FVG seharusnya TIDAK termitigasi hanya karena tusukan ekor (wick) jika body ditutup di bawah Top!")
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("sweep dengan rejection wick seharusnya terdeteksi sah!")
+	}
+}
