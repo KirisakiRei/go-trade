@@ -47,6 +47,28 @@ func NewEvaluator() *Evaluator {
 	return &Evaluator{}
 }
 
+// getFVGTolerance menentukan toleransi spread/noise sebelum sebuah ekor dianggap
+// benar-benar menutup FVG. Tanpa toleransi, selisih mikroskopis quote antar broker
+// sudah cukup untuk menghanguskan FVG yang secara riil belum tertutup.
+//
+// Ambang mengikuti skala harga karena satu angka tidak berlaku untuk semua instrumen.
+// Kelas instrumen dikenali dari besaran harga, selaras dengan minSLFloorFor di
+// pkg/sequence: pair JPY berharga ratusan dengan 3 desimal (1 pip = 0.01), sedangkan
+// forex 5 desimal berharga satuan (1 pip = 0.0001). Memakai satu ambang "harga < 50"
+// akan memberi pair JPY toleransi 50x lebih lebar dari seharusnya.
+func getFVGTolerance(price float64) float64 {
+	switch {
+	case price >= 10000.0:
+		return 2.00 // Indeks: 2.0 poin
+	case price >= 400.0:
+		return 0.50 // Gold / logam: $0.50
+	case price >= 50.0:
+		return 0.01 // Forex JPY (3 desimal): 1 pip
+	default:
+		return 0.00010 // Forex 5 desimal: 1 pip
+	}
+}
+
 // FindFVGs scans candle history and returns all 3-candle Fair Value Gaps.
 func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 	n := len(candles)
@@ -81,9 +103,12 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 			}
 
 			// Check if subsequently mitigated by candles k > i
-			// Berdasarkan Rule Opsi C: FVG termitigasi/hangus jika pernah tersentuh penuh (k.High >= fvg.Top atau k.Low <= fvg.Bottom)
+			// Berdasarkan Rule Opsi C: FVG termitigasi/hangus jika pernah tersentuh penuh (k.High >= fvg.Top).
+			// Toleransi spread diberlakukan: sentuhan ekor yang hanya melewati atap sejauh
+			// noise/spread tidak dihitung, supaya quote broker tidak menghanguskan FVG yang sah.
+			tolBear := getFVGTolerance(fvg.Top)
 			for k := i + 1; k < n; k++ {
-				if candles[k].High >= fvg.Top {
+				if candles[k].High >= fvg.Top+tolBear {
 					fvg.Mitigated = true
 					break
 				}
@@ -106,8 +131,10 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 			}
 
 			// Check if subsequently mitigated by candles k > i
+			// Toleransi spread diberlakukan sama seperti sisi bearish.
+			tolBull := getFVGTolerance(fvg.Bottom)
 			for k := i + 1; k < n; k++ {
-				if candles[k].Low <= fvg.Bottom {
+				if candles[k].Low <= fvg.Bottom-tolBull {
 					fvg.Mitigated = true
 					break
 				}
@@ -205,10 +232,12 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		cPrev := candles[k-1] // Bersebelahan langsung (adjacent)
 
 		// 0. Cek apakah FVG sudah terisi/tertutup penuh (100% Fully Filled/Mitigated)
-		if latestFVG.Type == FVGBearish && ck.High >= latestFVG.Top {
+		// Toleransi spread dipakai sama seperti di FindFVGs, supaya FVG yang masih hidup
+		// di sana tidak dianggap tertutup di sini hanya karena selisih quote broker.
+		if latestFVG.Type == FVGBearish && ck.High >= latestFVG.Top+getFVGTolerance(latestFVG.Top) {
 			return nil // Bearish FVG sudah tertutup penuh hingga atap (termitigasi)
 		}
-		if latestFVG.Type == FVGBullish && ck.Low <= latestFVG.Bottom {
+		if latestFVG.Type == FVGBullish && ck.Low <= latestFVG.Bottom-getFVGTolerance(latestFVG.Bottom) {
 			return nil // Bullish FVG sudah tertutup penuh hingga dasar (termitigasi)
 		}
 
@@ -235,7 +264,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// setup TIDAK dibatalkan, melainkan diberlakukan "Skenario 3 DOL Breached" (kunci TP ke 1:2.00 R:R).
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top {
+				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top+getFVGTolerance(latestFVG.Top) {
 					invalidated = true
 					break
 				}
@@ -294,7 +323,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom {
+				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom-getFVGTolerance(latestFVG.Bottom) {
 					invalidated = true
 					break
 				}
@@ -394,9 +423,13 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		// 3. Telusuri MUNDUR dari lowestIdx untuk mencari candle bearish PERTAMA dari deretan penurunan ini.
-		// SYARAT KETAT: Candle origin CISD WAJIB berada di dalam Candle 5 (Timestamp >= afterTime)!
-		// Tidak boleh mengambil origin dari candle sebelum Candle 5 dibuka.
-		// Dan lowestIdx wajib terjadi di dalam Candle 5 (afterTime)
+		// SYARAT KETAT: lowestIdx wajib terjadi di dalam Candle 5 (Timestamp >= afterTime).
+		// Batas bawah penelusuran origin memakai awal lilin sweep HTF (Candle 4), BUKAN awal Candle 5.
+		// Deretan candle lawan yang bersambung langsung menuju titik ekstrim boleh berawal di Candle 4;
+		// bila dipotong di batas Candle 5, origin yang benar ikut terbuang dan level CISD bergeser
+		// lebih tinggi sehingga entry terjadi terlalu dini. Penelusuran tetap berhenti di lilin sweep:
+		// tidak boleh menyeberang ke siklus sebelumnya.
+		// Bila sweepCandle kosong (pemanggil lama), batas ini tidak memasang potongan buatan.
 		if !afterTime.IsZero() && candles[lowestIdx].Timestamp.Before(afterTime) {
 			return nil, false // Low belum terbentuk di dalam Candle 5
 		}
@@ -408,8 +441,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		var firstBear *indicators.Candle
 		for curr >= 0 && candles[curr].Close < candles[curr].Open {
-			if !afterTime.IsZero() && candles[curr].Timestamp.Before(afterTime) {
-				break // Stop jika mundur melewati batas awal Candle 5!
+			if !sweepCandle.Timestamp.IsZero() && candles[curr].Timestamp.Before(sweepCandle.Timestamp) {
+				break // Tidak menyeberang sebelum lilin sweep HTF (Candle 4)
 			}
 			firstBear = &candles[curr]
 			curr--
@@ -417,7 +450,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		if firstBear == nil {
 			for k := lowestIdx; k >= 0; k-- {
-				if !afterTime.IsZero() && candles[k].Timestamp.Before(afterTime) {
+				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
 					break
 				}
 				if candles[k].Close < candles[k].Open {
@@ -486,9 +519,13 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		// 3. Telusuri MUNDUR dari highestIdx untuk mencari candle bullish PERTAMA dari deretan kenaikan ini.
-		// SYARAT KETAT: Candle origin CISD WAJIB berada di dalam Candle 5 (Timestamp >= afterTime)!
-		// Tidak boleh mengambil origin dari candle sebelum Candle 5 dibuka.
-		// Dan highestIdx wajib terjadi di dalam Candle 5 (afterTime)
+		// SYARAT KETAT: highestIdx wajib terjadi di dalam Candle 5 (Timestamp >= afterTime).
+		// Batas bawah penelusuran origin memakai awal lilin sweep HTF (Candle 4), BUKAN awal Candle 5.
+		// Deretan candle lawan yang bersambung langsung menuju titik ekstrim boleh berawal di Candle 4;
+		// bila dipotong di batas Candle 5, origin yang benar ikut terbuang dan level CISD bergeser
+		// lebih rendah sehingga entry terjadi terlalu dini. Penelusuran tetap berhenti di lilin sweep:
+		// tidak boleh menyeberang ke siklus sebelumnya.
+		// Bila sweepCandle kosong (pemanggil lama), batas ini tidak memasang potongan buatan.
 		if !afterTime.IsZero() && candles[highestIdx].Timestamp.Before(afterTime) {
 			return nil, false // High belum terbentuk di dalam Candle 5
 		}
@@ -500,8 +537,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		var firstBull *indicators.Candle
 		for curr >= 0 && candles[curr].Close > candles[curr].Open {
-			if !afterTime.IsZero() && candles[curr].Timestamp.Before(afterTime) {
-				break // Stop jika mundur melewati batas awal Candle 5!
+			if !sweepCandle.Timestamp.IsZero() && candles[curr].Timestamp.Before(sweepCandle.Timestamp) {
+				break // Tidak menyeberang sebelum lilin sweep HTF (Candle 4)
 			}
 			firstBull = &candles[curr]
 			curr--
@@ -509,7 +546,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		if firstBull == nil {
 			for k := highestIdx; k >= 0; k-- {
-				if !afterTime.IsZero() && candles[k].Timestamp.Before(afterTime) {
+				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
 					break
 				}
 				if candles[k].Close > candles[k].Open {

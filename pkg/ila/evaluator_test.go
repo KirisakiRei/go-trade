@@ -321,3 +321,308 @@ func TestDOLBreachedDoesNotInvalidateSweep(t *testing.T) {
 		t.Fatalf("FAILED: penembusan DOL tidak boleh membatalkan sweep (Skenario 3 DOL Breached)!")
 	}
 }
+
+// TestCISDOriginCanFormInPriorCandleRun mengunci perbaikan dari PR hermes (00a7f44).
+//
+// Bug yang diperbaiki: penelusuran origin CISD dipotong di awal Candle 5. Bila deretan
+// candle lawan sudah mulai di Candle 4 (lilin sweep HTF) dan bersambung turun/naiK menuju
+// ekstrim di Candle 5, origin yang benar ikut terbuang. Akibatnya level CISD diambil dari
+// candle pertama Candle 5 sehingga bergeser lebih tinggi (BEARISH) atau lebih rendah
+// (BULLISH), dan entry terjadi terlalu dini.
+func TestCISDOriginCanFormInPriorCandleRun(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	sweepCandle := indicators.Candle{
+		Timestamp: now.Add(-4 * time.Hour),
+		High:      1.11029,
+		Low:       1.10757,
+		Open:      1.10946,
+		Close:     1.10891,
+		IsClosed:  true,
+	}
+	afterTime := now // awal Candle 5
+
+	ltfCandles := []indicators.Candle{
+		// 08:00 NY: bearish, menyapu low lilin sweep
+		{Timestamp: now.Add(-60 * time.Minute), Open: 1.10875, High: 1.10934, Low: 1.10757, Close: 1.10766, IsClosed: true},
+		// 08:15 NY: bullish — ORIGIN sebenarnya, berada di siklus Candle 4
+		{Timestamp: now.Add(-45 * time.Minute), Open: 1.10766, High: 1.10885, Low: 1.10761, Close: 1.10852, IsClosed: true},
+		{Timestamp: now.Add(-30 * time.Minute), Open: 1.10852, High: 1.10899, Low: 1.10814, Close: 1.10868, IsClosed: true},
+		{Timestamp: now.Add(-15 * time.Minute), Open: 1.10868, High: 1.10898, Low: 1.10806, Close: 1.10891, IsClosed: true},
+		// --- batas Candle 5 (09:00 NY) ---
+		{Timestamp: now, Open: 1.10891, High: 1.10967, Low: 1.10886, Close: 1.10924, IsClosed: true},
+		{Timestamp: now.Add(15 * time.Minute), Open: 1.10924, High: 1.10985, Low: 1.10916, Close: 1.10961, IsClosed: true},
+		// 09:30 NY: bearish. Close 1.10825 < 1.10891 tapi BELUM menembus origin 1.10766.
+		{Timestamp: now.Add(30 * time.Minute), Open: 1.10961, High: 1.10968, Low: 1.10824, Close: 1.10825, IsClosed: true},
+	}
+
+	cisd1, _ := eval.DetectDynamicCISD(ltfCandles, "BEARISH", afterTime, sweepCandle)
+	if cisd1 == nil {
+		t.Fatalf("expected non-nil cisd object")
+	}
+	if cisd1.CISDLevel != 1.10766 {
+		t.Errorf("CISDLevel = %.5f; ingin 1.10766 (origin 08:15 NY, bukan 09:00 NY)", cisd1.CISDLevel)
+	}
+	if cisd1.Detected {
+		t.Errorf("candle 09:30 NY belum menembus 1.10766; seharusnya Detected=false")
+	}
+
+	// 09:45 NY menembus 1.10766 -> CISD sah.
+	ltfCandles = append(ltfCandles, indicators.Candle{
+		Timestamp: now.Add(45 * time.Minute), Open: 1.10825, High: 1.10829, Low: 1.10740, Close: 1.10744, IsClosed: true,
+	})
+
+	cisd2, _ := eval.DetectDynamicCISD(ltfCandles, "BEARISH", afterTime, sweepCandle)
+	if cisd2 == nil || !cisd2.Detected {
+		t.Fatalf("candle 09:45 NY seharusnya memicu CISD sah")
+	}
+	if cisd2.EntryPrice != 1.10744 {
+		t.Errorf("EntryPrice = %.5f; ingin 1.10744", cisd2.EntryPrice)
+	}
+}
+
+// TestCISDOriginBullishCanFormInPriorCandleRun adalah cermin BULLISH dari test di atas.
+// PR hermes hanya menguji sisi BEARISH; kode BULLISH terpisah, jadi ikut dikunci.
+//
+// Arah BULLISH: cari low terendah di Candle 5, lalu telusuri MUNDUR deretan candle
+// bearish dan pakai Open candle bearish pertama sebagai level CISD. Deretan itu boleh
+// berawal di Candle 4 (siklus sweep). Kalau dipotong di awal Candle 5, origin bergeser
+// ke candle bearish pertama DI DALAM Candle 5 sehingga level CISD lebih rendah dan
+// CISD terpicu terlalu dini.
+func TestCISDOriginBullishCanFormInPriorCandleRun(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	sweepCandle := indicators.Candle{
+		Timestamp: now.Add(-4 * time.Hour),
+		High:      1.11029,
+		Low:       1.10757,
+		Open:      1.10946,
+		Close:     1.10891,
+		IsClosed:  true,
+	}
+
+	ltfCandles := []indicators.Candle{
+		// 08:00 NY: bearish besar, menyapu low lilin sweep. Origin sebenarnya = 1.10980.
+		{Timestamp: now.Add(-60 * time.Minute), Open: 1.10980, High: 1.10990, Low: 1.10760, Close: 1.10810, IsClosed: true},
+		{Timestamp: now.Add(-45 * time.Minute), Open: 1.10810, High: 1.10840, Low: 1.10770, Close: 1.10790, IsClosed: true},
+		{Timestamp: now.Add(-30 * time.Minute), Open: 1.10790, High: 1.10820, Low: 1.10760, Close: 1.10780, IsClosed: true},
+		{Timestamp: now.Add(-15 * time.Minute), Open: 1.10780, High: 1.10800, Low: 1.10758, Close: 1.10770, IsClosed: true},
+		// --- batas Candle 5 (09:00 NY) ---
+		{Timestamp: now, Open: 1.10770, High: 1.10800, Low: 1.10758, Close: 1.10790, IsClosed: true},
+		// 09:15 NY: bullish, low terdalam Candle 5 = 1.10758
+		{Timestamp: now.Add(15 * time.Minute), Open: 1.10790, High: 1.10800, Low: 1.10758, Close: 1.10775, IsClosed: true},
+		// 09:30 NY: bullish. Close 1.10900 > 1.10810 tapi BELUM menembus origin 1.10980.
+		{Timestamp: now.Add(30 * time.Minute), Open: 1.10775, High: 1.10905, Low: 1.10770, Close: 1.10900, IsClosed: true},
+	}
+
+	cisd1, _ := eval.DetectDynamicCISD(ltfCandles, "BULLISH", now, sweepCandle)
+	if cisd1 == nil {
+		t.Fatalf("expected non-nil cisd object")
+	}
+	if cisd1.CISDLevel != 1.10980 {
+		t.Errorf("CISDLevel = %.5f; ingin 1.10980 (origin 08:00 NY, bukan candle bearish pertama di Candle 5)", cisd1.CISDLevel)
+	}
+	if cisd1.Detected {
+		t.Errorf("candle 09:30 NY belum menembus 1.10980; seharusnya Detected=false")
+	}
+
+	// 09:45 NY menembus 1.10980 -> CISD sah.
+	ltfCandles = append(ltfCandles, indicators.Candle{
+		Timestamp: now.Add(45 * time.Minute), Open: 1.10900, High: 1.11000, Low: 1.10895, Close: 1.10990, IsClosed: true,
+	})
+
+	cisd2, _ := eval.DetectDynamicCISD(ltfCandles, "BULLISH", now, sweepCandle)
+	if cisd2 == nil || !cisd2.Detected {
+		t.Fatalf("candle 09:45 NY seharusnya memicu CISD sah")
+	}
+	if cisd2.EntryPrice != 1.10990 {
+		t.Errorf("EntryPrice = %.5f; ingin 1.10990", cisd2.EntryPrice)
+	}
+}
+
+// TestCISDOriginStillStopsAtSweepCandle memastikan perbaikan tidak membuka terlalu jauh:
+// penelusuran tidak boleh menyeberang ke sebelum lilin sweep HTF (Candle 4).
+func TestCISDOriginStillStopsAtSweepCandle(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	sweepCandle := indicators.Candle{
+		Timestamp: now.Add(-4 * time.Hour),
+		High:      1.11029,
+		Low:       1.10757,
+		Open:      1.10946,
+		Close:     1.10891,
+		IsClosed:  true,
+	}
+
+	ltfCandles := []indicators.Candle{
+		// SEBELUM lilin sweep: bearish panjang. Bila terpakai, level CISD akan 1.11200.
+		{Timestamp: now.Add(-5 * time.Hour), Open: 1.11200, High: 1.11210, Low: 1.10600, Close: 1.10610, IsClosed: true},
+		// Sesudah lilin sweep: deretan bearish berakhir di low Candle 5.
+		{Timestamp: now.Add(-3 * time.Hour), Open: 1.10960, High: 1.10970, Low: 1.10900, Close: 1.10920, IsClosed: true},
+		{Timestamp: now.Add(-2 * time.Hour), Open: 1.10920, High: 1.10930, Low: 1.10850, Close: 1.10870, IsClosed: true},
+		{Timestamp: now, Open: 1.10870, High: 1.10890, Low: 1.10800, Close: 1.10830, IsClosed: true},
+	}
+
+	cisd, _ := eval.DetectDynamicCISD(ltfCandles, "BULLISH", now, sweepCandle)
+	if cisd == nil {
+		t.Fatalf("expected non-nil cisd object")
+	}
+	// Origin wajib deretan bearish sesudah sweep (1.10960), bukan candle 1.11200 di siklus lama.
+	if cisd.CISDLevel != 1.10960 {
+		t.Errorf("CISDLevel = %.5f; ingin 1.10960 (tidak menyeberang sebelum lilin sweep)", cisd.CISDLevel)
+	}
+}
+
+// TestWickPierceWithinToleranceDoesNotMitigateFVG mengunci toleransi spread/noise
+// pada mitigasi FVG (diambil dari PR hermes, c98a206).
+//
+// Bug yang dicegah: sentuhan ekor yang hanya melewati atap/dasar FVG sejauh
+// noise quote broker sudah dianggap menutup FVG. Akibatnya FVG sah hilang dari
+// pemantauan hanya karena selisih spread, dan setup yang seharusnya terdeteksi
+// tidak pernah muncul. Toleransi tetap terbatas: tembusan yang jelas melampaui
+// spread TETAP menghanguskan FVG.
+func TestWickPierceWithinToleranceDoesNotMitigateFVG(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// --- 1. BEARISH, tusukan DALAM toleransi (38 sen <= 50 sen): TIDAK mitigated ---
+	bearishDalamToleransi := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1 (Low 4240 = Top)
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2 displacement turun
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High 4212 = Bottom)
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4230, Low: 4160, Close: 4180, IsClosed: true},
+		// Ekor menusuk ke 4240.38, hanya 38 sen di atas Top.
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4240.38, Low: 4175, Close: 4200, IsClosed: true},
+		{Timestamp: now, Open: 4200, High: 4205, Low: 4195, Close: 4202, IsClosed: false},
+	}
+
+	fvgs := eval.FindFVGs(bearishDalamToleransi)
+	if len(fvgs) == 0 {
+		t.Fatalf("expected FVG to be found")
+	}
+	if fvgs[0].Mitigated {
+		t.Fatalf("FVG bearish TIDAK boleh termitigasi: tusukan 38 sen masih dalam toleransi 50 sen")
+	}
+	if sweep := eval.DetectHTFIlaSweep(bearishDalamToleransi); sweep == nil || !sweep.Detected {
+		t.Fatalf("sweep dengan rejection wick dalam toleransi seharusnya sah terdeteksi")
+	}
+
+	// --- 2. BEARISH, tusukan MELAMPAUI toleransi ($2 > 50 sen): TETAP mitigated ---
+	bearishLewatToleransi := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true},
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true},
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true},
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4242, Low: 4160, Close: 4180, IsClosed: true},
+		{Timestamp: now, Open: 4180, High: 4185, Low: 4175, Close: 4180, IsClosed: false},
+	}
+
+	fvgsMit := eval.FindFVGs(bearishLewatToleransi)
+	if len(fvgsMit) == 0 || !fvgsMit[0].Mitigated {
+		t.Fatalf("FVG bearish HARUS termitigasi: tusukan $2 melampaui toleransi 50 sen")
+	}
+}
+
+// TestWickPierceToleranceBullish adalah cermin BULLISH dari toleransi serupa.
+// PR hermes hanya menguji sisi BEARISH; kode mitigasi BULLISH terpisah.
+func TestWickPierceToleranceBullish(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// --- 1. BULLISH, tusukan 38 sen di bawah Bottom (dalam toleransi): TIDAK mitigated ---
+	dalamToleransi := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4150, High: 4160, Low: 4150, Close: 4155, IsClosed: true}, // C1 (High 4160 = Bottom)
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4155, High: 4250, Low: 4155, Close: 4245, IsClosed: true}, // C2 displacement naik
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4245, High: 4290, Low: 4250, Close: 4285, IsClosed: true}, // C3 (Low 4250 = Top)
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4260, High: 4265, Low: 4170, Close: 4180, IsClosed: true},
+		// Ekor menusuk ke 4159.62, hanya 38 sen di bawah Bottom 4160.
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4185, Low: 4159.62, Close: 4175, IsClosed: true},
+		{Timestamp: now, Open: 4175, High: 4180, Low: 4170, Close: 4178, IsClosed: false},
+	}
+
+	fvgs := eval.FindFVGs(dalamToleransi)
+	if len(fvgs) == 0 {
+		t.Fatalf("expected FVG to be found")
+	}
+	if fvgs[0].Mitigated {
+		t.Fatalf("FVG bullish TIDAK boleh termitigasi: tusukan 38 sen masih dalam toleransi 50 sen")
+	}
+
+	// --- 2. BULLISH, tusukan $2 di bawah Bottom: TETAP mitigated ---
+	lewatToleransi := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4150, High: 4160, Low: 4150, Close: 4155, IsClosed: true},
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4155, High: 4250, Low: 4155, Close: 4245, IsClosed: true},
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4245, High: 4290, Low: 4250, Close: 4285, IsClosed: true},
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4260, High: 4265, Low: 4158, Close: 4180, IsClosed: true},
+		{Timestamp: now, Open: 4180, High: 4185, Low: 4170, Close: 4178, IsClosed: false},
+	}
+
+	fvgsMit := eval.FindFVGs(lewatToleransi)
+	if len(fvgsMit) == 0 || !fvgsMit[0].Mitigated {
+		t.Fatalf("FVG bullish HARUS termitigasi: tusukan $2 melampaui toleransi 50 sen")
+	}
+}
+
+// TestFVGTolerancePerInstrumen memastikan ambang mengikuti skala harga.
+// Satu angka tetap salah: 50 sen berarti $0.50 pada XAUUSD tetapi 500 pips
+// pada EURUSD, sehingga toleransi harus dibedakan per kelas instrumen.
+func TestFVGTolerancePerInstrumen(t *testing.T) {
+	kasus := []struct {
+		nama   string
+		harga  float64
+		ingin  float64
+		kurang string
+	}{
+		{"Forex EURUSD", 1.0850, 0.00010, "1 pip (5 desimal)"},
+		{"Forex GBPUSD", 1.2650, 0.00010, "1 pip (5 desimal)"},
+		{"Forex USDJPY", 152.30, 0.01, "1 pip (3 desimal)"},
+		{"Forex GBPJPY", 189.50, 0.01, "1 pip (3 desimal)"},
+		{"Gold XAUUSD", 4240.0, 0.50, "50 sen"},
+		{"Indeks USTEC", 20500.0, 2.00, "2 poin"},
+		{"Indeks US100", 21000.0, 2.00, "2 poin"},
+	}
+
+	for _, k := range kasus {
+		if dapat := getFVGTolerance(k.harga); dapat != k.ingin {
+			t.Errorf("%s (harga %.4f): toleransi = %v; ingin %v (%s)", k.nama, k.harga, dapat, k.ingin, k.kurang)
+		}
+	}
+}
+
+// TestForexToleranceIsOnePip memastikan toleransi forex benar-benar 1 pip,
+// bukan 50 sen yang akan melonggarkan EURUSD secara berlebihan.
+func TestForexToleranceIsOnePip(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	basis := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 1.0850, High: 1.0860, Low: 1.0850, Close: 1.0855, IsClosed: true}, // C1 (Low 1.0850 = Top)
+		{Timestamp: now.Add(-16 * time.Hour), Open: 1.0855, High: 1.0855, Low: 1.0800, Close: 1.0805, IsClosed: true}, // C2 displacement turun
+		{Timestamp: now.Add(-12 * time.Hour), Open: 1.0805, High: 1.0820, Low: 1.0800, Close: 1.0815, IsClosed: true}, // C3 (High 1.0820 = Bottom)
+	}
+
+	// 1. Tusukan 0.5 pip (dalam toleransi): tidak mitigated.
+	dalam := append(append([]indicators.Candle{}, basis...),
+		indicators.Candle{Timestamp: now.Add(-8 * time.Hour), Open: 1.0815, High: 1.08505, Low: 1.0810, Close: 1.0820, IsClosed: true},
+		indicators.Candle{Timestamp: now, Open: 1.0820, High: 1.0825, Low: 1.0815, Close: 1.0822, IsClosed: false},
+	)
+	fvgsDalam := eval.FindFVGs(dalam)
+	if len(fvgsDalam) == 0 {
+		t.Fatalf("expected FVG to be found")
+	}
+	if fvgsDalam[0].Mitigated {
+		t.Fatalf("EURUSD: tusukan 0.5 pip masih dalam toleransi 1 pip, tidak boleh termitigasi")
+	}
+
+	// 2. Tusukan 1.5 pip (melampaui toleransi): mitigated.
+	lewat := append(append([]indicators.Candle{}, basis...),
+		indicators.Candle{Timestamp: now.Add(-8 * time.Hour), Open: 1.0815, High: 1.08515, Low: 1.0810, Close: 1.0820, IsClosed: true},
+		indicators.Candle{Timestamp: now, Open: 1.0820, High: 1.0825, Low: 1.0815, Close: 1.0822, IsClosed: false},
+	)
+	fvgsLewat := eval.FindFVGs(lewat)
+	if len(fvgsLewat) == 0 || !fvgsLewat[0].Mitigated {
+		t.Fatalf("EURUSD: tusukan 1.5 pip melampaui toleransi 1 pip, harus termitigasi")
+	}
+}
