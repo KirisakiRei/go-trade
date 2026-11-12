@@ -242,6 +242,25 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-12] PERBAIKAN — Penegakan Mitigasi FVG Berbasis Body Close (Anti-False Mitigation by Wick)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Mitigasi FVG Wajib Berbasis Body Close (`pkg/ila/evaluator.go`):**
+   - **Akar Masalah:** Sebelumnya, fungsi `FindFVGs` dan `DetectHTFIlaSweep` membatalkan/menghanguskan FVG jika ada candle yang menusuk hingga melewati batas luar FVG (`High >= Top` untuk Bearish atau `Low <= Bottom` untuk Bullish). Hal ini memicu false mitigation: pada kasus XAUUSD H1 tadi pagi, candle sweep jam 06:00 NY menusuk ke 3955.51 (hanya 38 sen di atas atap FVG 3955.13) dan ditutup jatuh di 3944.32 (rejection wick kuat). Karena ekor menusuk 38 sen tersebut, FVG jam 03:00 NY langsung dibunuh dan dianggap hangus, sehingga setup sweep dan CISD M15 jam 07:10 NY tidak tertangkap engine.
+   - **Perbaikan Deterministik:** Celah FVG kini **hanya termitigasi/hangus jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG** (`Close > Top` untuk Bearish, atau `Close < Bottom` untuk Bullish).
+   - Penusukan ekor (wick) tanpa penutupan body diakui sebagai **rejection wick / liquidity sweep sah**, dan FVG tetap hidup aktif.
+2. **Penyelarasan Evaluator Sweep & Siklus:**
+   - Menghapus blokir prematur `ck.High >= latestFVG.Top` pada lilin sweep, dan menggantinya dengan validasi body close `ck.Close <= latestFVG.Top` serta `ck.Close <= cPrev.High`.
+   - Lilin setelah sweep (`post`) hanya membatalkan siklus jika menembus ekor sweep (`High > ck.High`) atau ditutup tembus body di atas FVG (`Close > Top`).
+3. **Unit Test Pengunci:**
+   - Ditambahkan `TestWickPierceDoesNotMitigateFVG` di `pkg/ila/evaluator_test.go` untuk memvalidasi bahwa tusukan ekor ke luar FVG tetap menghasilkan FVG aktif dan sweep sah selama body ditutup di dalam/bawah FVG.
+
+#### Verifikasi
+- `go test -v -count=1 ./pkg/ila/...` PASS 100%.
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
