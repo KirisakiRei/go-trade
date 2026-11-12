@@ -43,6 +43,18 @@ func formatILAVal(val float64) string {
 	return fmt.Sprintf("%.2f", val)
 }
 
+// getFVGTolerance menentukan toleransi spread/noise agar selisih mikroskopis quote broker
+// tidak membunuh FVG yang belum tertutup penuh secara riil.
+func getFVGTolerance(price float64) float64 {
+	if price < 50.0 {
+		return 0.00010 // Forex (1 pip)
+	}
+	if price < 10000.0 {
+		return 0.50 // Gold / Metals ($0.50)
+	}
+	return 2.00 // Indices (2.0 poin)
+}
+
 func NewEvaluator() *Evaluator {
 	return &Evaluator{}
 }
@@ -80,11 +92,15 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 				Candle3Time:  c3.Timestamp,
 			}
 
+			tol := getFVGTolerance(fvg.Top)
+
 			// Check if subsequently mitigated by candles k > i
-			// Aturan Baku: FVG termitigasi/hangus hanya jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG (Close > Top).
-			// Penusukan ekor (wick) tanpa penutupan body bukanlah penutupan sempurna FVG melainkan liquidity sweep/rejection.
+			// Aturan Baku ILA: FVG termitigasi/hangus jika:
+			// 1. Ada candle closed dengan BODY menembus batas luar FVG (Close > Top), ATAU
+			// 2. Ada candle dengan ekor (wick) yang menutup penuh FVG melampaui toleransi spread/noise (High > Top + tol).
+			// Penusukan ekor dalam batas toleransi dengan body tertahan di dalam/bawah adalah rejection wick/sweep, BUKAN mitigasi.
 			for k := i + 1; k < n; k++ {
-				if candles[k].IsClosed && candles[k].Close > fvg.Top {
+				if candles[k].IsClosed && (candles[k].Close > fvg.Top || candles[k].High > fvg.Top+tol) {
 					fvg.Mitigated = true
 					break
 				}
@@ -106,10 +122,14 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 				Candle3Time:  c3.Timestamp,
 			}
 
+			tol := getFVGTolerance(fvg.Bottom)
+
 			// Check if subsequently mitigated by candles k > i
-			// Aturan Baku: FVG termitigasi/hangus hanya jika ada candle yang sudah closed resmi dengan BODY menembus batas luar FVG (Close < Bottom).
+			// Aturan Baku ILA: FVG termitigasi/hangus jika:
+			// 1. Ada candle closed dengan BODY menembus batas luar FVG (Close < Bottom), ATAU
+			// 2. Ada candle dengan ekor (wick) yang menutup penuh FVG melampaui toleransi spread/noise (Low < Bottom - tol).
 			for k := i + 1; k < n; k++ {
-				if candles[k].IsClosed && candles[k].Close < fvg.Bottom {
+				if candles[k].IsClosed && (candles[k].Close < fvg.Bottom || candles[k].Low < fvg.Bottom-tol) {
 					fvg.Mitigated = true
 					break
 				}
@@ -185,14 +205,14 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		ck := candles[k]
 		cPrev := candles[k-1] // Bersebelahan langsung (adjacent)
 
-		// 0. Cek apakah FVG sudah tertembus penuh secara BODY (Body Breakout):
-		// FVG hanya dinyatakan hangus jika candle ditutup menembus batas luar FVG.
-		// Penusukan ekor (wick) tanpa penutupan body adalah penolakan/sapuan likuiditas, bukan pembatalan FVG.
-		if latestFVG.Type == FVGBearish && ck.IsClosed && ck.Close > latestFVG.Top {
-			return nil // Bearish FVG sudah tertembus penuh by body
+		tol := getFVGTolerance(latestFVG.Top)
+
+		// 0. Cek apakah FVG sudah tertembus penuh (Body Breakout atau Wick menembus melampaui toleransi):
+		if latestFVG.Type == FVGBearish && ck.IsClosed && (ck.Close > latestFVG.Top || ck.High > latestFVG.Top+tol) {
+			return nil // Bearish FVG sudah tertembus penuh by body / wick tembus jauh
 		}
-		if latestFVG.Type == FVGBullish && ck.IsClosed && ck.Close < latestFVG.Bottom {
-			return nil // Bullish FVG sudah tertembus penuh by body
+		if latestFVG.Type == FVGBullish && ck.IsClosed && (ck.Close < latestFVG.Bottom || ck.Low < latestFVG.Bottom-tol) {
+			return nil // Bullish FVG sudah tertembus penuh by body / wick tembus jauh
 		}
 
 		// 1. BEARISH ILA SWEEP:
@@ -213,12 +233,12 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			// Sweep tetap sah dan aktif selama:
 			// 1. Belum ada candle berikutnya yang menembus ekor sweep (ck.High)
-			// 2. FVG belum tertembus oleh candle yang ditutup by body (candles[post].Close > latestFVG.Top)
+			// 2. FVG belum tertembus melampaui batas toleransi (Close > Top atau High > Top + tol)
 			// Catatan: Jika harga sudah menembus target SSL lebih dulu sebelum CISD terbentuk,
 			// setup TIDAK dibatalkan, melainkan diberlakukan "Skenario 3 DOL Breached" (kunci TP ke 1:2.00 R:R).
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].High > ck.High || (candles[post].IsClosed && candles[post].Close > latestFVG.Top) {
+				if candles[post].High > ck.High || (candles[post].IsClosed && (candles[post].Close > latestFVG.Top || candles[post].High > latestFVG.Top+tol)) {
 					invalidated = true
 					break
 				}
@@ -277,7 +297,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].Low < ck.Low || (candles[post].IsClosed && candles[post].Close < latestFVG.Bottom) {
+				if candles[post].Low < ck.Low || (candles[post].IsClosed && (candles[post].Close < latestFVG.Bottom || candles[post].Low < latestFVG.Bottom-tol)) {
 					invalidated = true
 					break
 				}
