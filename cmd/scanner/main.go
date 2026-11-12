@@ -549,10 +549,11 @@ func main() {
 			prevILA := state.ILAPairs[ilaKey]
 
 			// Scheduler Berbasis Penutupan Lilin (Candle-Close Scheduling):
-			// Jika status menunggu CISD di LTF, jadwal mengikuti penutupan lilin LTF.
+			// Jika status menunggu CISD di LTF atau status HTF sudah sweep valid,
+			// jadwal mengikuti penutupan lilin LTF (+3 detik buffer).
 			// Selain itu, jadwal mengikuti penutupan lilin HTF.
 			checkTF := ep.HTF
-			if prevILA.LastStatus == "WAIT_LTF_CISD" || prevILA.LastStatus == "READY_TO_ENTRY" {
+			if prevILA.LastStatus == "WAIT_LTF_CISD" || prevILA.LastStatus == "READY_TO_ENTRY" || prevILA.LastHTFStatus == "WAIT_LTF_CISD" || prevILA.LastHTFStatus == "READY_TO_ENTRY" {
 				checkTF = ep.LTF
 			}
 

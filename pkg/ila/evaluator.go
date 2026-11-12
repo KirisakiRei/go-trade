@@ -145,6 +145,19 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 	// Kunci murni pada FVG aktif TERBARU
 	latestFVG := activeFVGs[len(activeFVGs)-1]
 
+	// Deteksi apakah terjadi Double / Stacked FVG (displacements berturut-turut pada arah yang sama).
+	// Pada kondisi Double FVG, Candle 3 dari FVG terbaru adalah batas/lantai FVG yang sah disapu
+	// oleh candle berikutnya saat melakukan retracement masuk ke area FVG.
+	isDoubleFVG := false
+	if len(activeFVGs) >= 2 {
+		prevFVG := activeFVGs[len(activeFVGs)-2]
+		if prevFVG.Type == latestFVG.Type {
+			if latestFVG.Candle2Index <= prevFVG.Candle2Index+2 || latestFVG.Candle1Index == prevFVG.Candle2Index {
+				isDoubleFVG = true
+			}
+		}
+	}
+
 	for k := n - 1; k > latestFVG.Candle2Index; k-- {
 		// 1. PENCEGAHAN SWEEP ZOMBIE:
 		// Sweep hanya relevan jika terjadi di:
@@ -157,10 +170,13 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		}
 
 		// 2. PENCEGAHAN SWEEP PALSU TERHADAP CANDLE 3:
-		// Candle pembentuk FVG adalah Candle 1, 2, dan 3 (latestFVG.Candle3Index).
-		// Candle yang disapu (cPrev = candles[k-1]) TIDAK BOLEH Candle 3 atau sebelumnya.
-		// Minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
-		if k-1 <= latestFVG.Candle3Index {
+		// Pada Single FVG biasa, minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
+		// Namun pada Double FVG (Consecutive Displacement), Candle 3 pembatas FVG terbaru SAH disapu
+		// oleh candle berikutnya saat harga retrace masuk ke FVG.
+		if k-1 < latestFVG.Candle3Index {
+			continue
+		}
+		if k-1 == latestFVG.Candle3Index && !isDoubleFVG {
 			continue
 		}
 
@@ -194,10 +210,11 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// Sweep tetap sah dan aktif selama:
 			// 1. Belum ada candle berikutnya yang menembus ekor sweep (ck.High)
 			// 2. FVG belum tertutup penuh (candles[post].High >= latestFVG.Top)
-			// 3. Target DOL belum tersentuh/tertembus sebelum entry (candles[post].Low <= ssl)
+			// Catatan: Jika harga sudah menembus target SSL lebih dulu sebelum CISD terbentuk,
+			// setup TIDAK dibatalkan, melainkan diberlakukan "Skenario 3 DOL Breached" (kunci TP ke 1:2.00 R:R).
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top || candles[post].Low <= ssl {
+				if candles[post].High > ck.High || candles[post].High >= latestFVG.Top {
 					invalidated = true
 					break
 				}
@@ -256,7 +273,7 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 			// VALIDASI SIKLUS AKTIF (Aturan Baku ILA):
 			invalidated := false
 			for post := k + 1; post < n; post++ {
-				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom || candles[post].High >= bsl {
+				if candles[post].Low < ck.Low || candles[post].Low <= latestFVG.Bottom {
 					invalidated = true
 					break
 				}
