@@ -273,3 +273,193 @@ func TestPairsForDenganNormalisasiBerbeda(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-simbol: kebijakan pasangan timeframe tidak boleh bocor antar simbol.
+// ---------------------------------------------------------------------------
+
+func TestWantedPairsSimbolTanpaKebijakanMemakaiSemua(t *testing.T) {
+	// Simbol yang belum pernah diatur harus mendapat seluruh pasangan bawaan,
+	// bukan nil — kalau salah, simbol itu mati diam-diam.
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if dibatasi {
+		t.Fatalf("simbol tanpa kebijakan tidak boleh dianggap dibatasi")
+	}
+	if len(pairs) != 0 {
+		t.Fatalf("tanpa pembatasan engine memakai daftar evaluator, pairs harus kosong, dapat %v", pairs)
+	}
+}
+
+func TestWantedPairsSatuSimbolDibatasi(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+		},
+	})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if !dibatasi {
+		t.Fatalf("simbol dengan kebijakan restricted harus dianggap dibatasi")
+	}
+	if len(pairs) != 2 {
+		t.Fatalf("harus dapat 2 pasangan, dapat %d: %v", len(pairs), pairs)
+	}
+}
+
+func TestWantedPairsRestrictedKosongTidakDievaluasi(t *testing.T) {
+	// Opsi A: semua switch dimatikan. Hasilnya harus "dibatasi tapi kosong",
+	// bukan "tidak dibatasi".
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: nil, Restricted: true},
+		},
+	})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if !dibatasi {
+		t.Fatalf("restricted kosong tetap harus dianggap dibatasi")
+	}
+	if len(pairs) != 0 {
+		t.Fatalf("restricted kosong harus tanpa pasangan, dapat %v", pairs)
+	}
+}
+
+func TestWantedPairsTidakBocorAntarSimbol(t *testing.T) {
+	// INTI PERBAIKAN: XAUUSD punya 2 pasangan, EURUSD punya 4. Daftar satu
+	// simbol tidak boleh ikut ke simbol lain.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+			"EURUSD": {
+				Pairs: []Pair{
+					{HTF: "W", LTF: "H4"},
+					{HTF: "D1", LTF: "H1"},
+					{HTF: "H4", LTF: "M15"},
+					{HTF: "H1", LTF: "M5"},
+				},
+				Restricted: true,
+			},
+		},
+	})
+
+	xau, _ := reg.WantedPairs("XAUUSD")
+	eur, _ := reg.WantedPairs("EURUSD")
+
+	if len(xau) != 2 {
+		t.Fatalf("XAUUSD harus 2 pasangan, dapat %d: %v", len(xau), xau)
+	}
+	if len(eur) != 4 {
+		t.Fatalf("EURUSD harus 4 pasangan, dapat %d: %v", len(eur), eur)
+	}
+	for _, p := range xau {
+		for _, q := range eur {
+			if p == q {
+				// Boleh saja ada pasangan yang sama di dua simbol; yang salah
+				// adalah jumlahnya ikut tercampur seperti bug aslinya.
+				continue
+			}
+		}
+	}
+}
+
+func TestWantedPairsSimbolTidakAdaDiPetaMemakaiSemua(t *testing.T) {
+	// kebijakan ada untuk XAUUSD saja; EURUSD harus tetap penuh.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: []Pair{{HTF: "H1", LTF: "M5"}}, Restricted: true},
+		},
+	})
+
+	eur, dibatasi := reg.WantedPairs("EURUSD")
+	if dibatasi || len(eur) != 0 {
+		t.Fatalf("EURUSD tanpa entri di peta harus memakai semua pasangan, dapat dibatasi=%v pairs=%v", dibatasi, eur)
+	}
+}
+
+func TestWantedPairsSatuPelangganTanpaBatasanMembatalkan(t *testing.T) {
+	// Satu pelanggan minta semua pasangan -> pembatasan simbol itu batal,
+	// supaya sinyalnya tetap dihitung.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner-a",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: []Pair{{HTF: "H1", LTF: "M5"}}, Restricted: true},
+		},
+	})
+	reg.Add(Subscriber{ID: "runner-b", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	_, dibatasi := reg.WantedPairs("XAUUSD")
+	if dibatasi {
+		t.Fatalf("pelanggan tanpa batasan harus membatalkan pembatasan simbol")
+	}
+}
+
+func TestPairsForRestrictedKosongTidakEvaluasi(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: nil, Restricted: true},
+		},
+	})
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+
+	dipanggil := &[]string{}
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 0 {
+		t.Fatalf("restricted kosong tidak boleh mengevaluasi apa pun, dapat %v", *dipanggil)
+	}
+}
+
+func TestPairsForSimbolLainTetapJalan(t *testing.T) {
+	// XAUUSD dimatikan total, EURUSD dibatasi 2: evaluasi hanya untuk EURUSD.
+	fake := evaluatorEmpatPasangan()
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Restricted: true},
+			"EURUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+		},
+	})
+	pub := NewPublisher(fake, reg, Version{Strategy: "ila-2.0"}, discards())
+
+	xau := pub.pairsFor("XAUUSD")
+	eur := pub.pairsFor("EURUSD")
+
+	if len(xau) != 0 {
+		t.Fatalf("XAUUSD dimatikan, harus 0 pasangan, dapat %v", xau)
+	}
+	if len(eur) != 2 {
+		t.Fatalf("EURUSD harus 2 pasangan, dapat %d: %v", len(eur), eur)
+	}
+}

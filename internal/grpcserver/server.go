@@ -74,6 +74,7 @@ func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) 
 		ID:          req.GetSubscriberId(),
 		Symbols:     toSet(symbols),
 		Pairs:       pairs,
+		SymbolPairs: kebijakanDari(req.GetSymbolPairs()),
 		SymbolFeeds: req.GetSymbolFeeds(),
 		WantStatus:  req.GetWantStatusUpdates(),
 		Send:        s.senderFor(req.GetSubscriberId()),
@@ -82,7 +83,8 @@ func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) 
 	log.Info("pelanggan berlangganan",
 		"evt", "subscribe.ok",
 		"subscriber", req.GetSubscriberId(), "symbols", symbols,
-		"pairs", len(pairs), "feeds", len(req.GetSymbolFeeds()))
+		"pairs", len(pairs), "feeds", len(req.GetSymbolFeeds()),
+		"symbol_pairs", len(req.GetSymbolPairs()))
 
 	return &enginev1.SubscribeResponse{
 		Ok:              true,
@@ -130,6 +132,7 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 	symbols := sanitize(req.GetSymbols())
 	s.reg.Add(engine.Subscriber{
 		ID: id, Symbols: toSet(symbols),
+		SymbolPairs: kebijakanDari(req.GetSymbolPairs()),
 		SymbolFeeds: req.GetSymbolFeeds(),
 		WantStatus:  req.GetWantStatusUpdates(), Send: s.senderFor(id),
 	})
@@ -276,6 +279,32 @@ func pasanganDari(in []*enginev1.Pair) []engine.Pair {
 			continue
 		}
 		out = append(out, engine.Pair{HTF: htf, LTF: ltf})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// kebijakanDari mengubah peta kebijakan per simbol dari kontrak gRPC menjadi
+// bentuk yang dipakai Registry.
+//
+// Simbol dengan daftar kosong TETAP dimasukkan bila restricted=true: artinya
+// seluruh pasangannya sengaja dimatikan, dan engine harus tahu itu.
+func kebijakanDari(in map[string]*enginev1.SymbolPairs) map[string]engine.PairPolicy {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]engine.PairPolicy, len(in))
+	for symbol, pairSet := range in {
+		symbol = strings.TrimSpace(symbol)
+		if symbol == "" {
+			continue
+		}
+		out[symbol] = engine.PairPolicy{
+			Pairs:      pasanganDari(pairSet.GetPairs()),
+			Restricted: pairSet.GetRestricted(),
+		}
 	}
 	if len(out) == 0 {
 		return nil

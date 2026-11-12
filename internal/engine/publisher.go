@@ -41,6 +41,10 @@ type Publisher struct {
 	evaluasiTerakhir time.Time
 	evaluasiMenit    int
 
+	// dimatikanSemua mencatat simbol yang seluruh pasangannya dimatikan agar
+	// peringatan hanya muncul sekali, bukan tiap menit.
+	dimatikanSemua map[string]struct{}
+
 	// feed memilih sumber candle per simbol. Nil berarti engine memakai
 	// pemetaan bawaan penyedia data (perilaku lama).
 	feed FeedRouter
@@ -170,9 +174,10 @@ func (p *Publisher) catatDenyut(now time.Time, symbols []string) {
 		total += len(pairs)
 		label := fmt.Sprintf("%s:%d", symbol, len(pairs))
 		if len(pairs) == 0 {
-			// Nol pasangan berarti permintaan pelanggan semuanya di luar
-			// aturan evaluator: slot tidak akan pernah dihitung.
-			label += "(ditolak)"
+			// Nol pasangan berarti tidak ada slot yang akan dihitung: bisa
+			// karena seluruh switch dimatikan, atau karena permintaan
+			// pelanggan semuanya di luar aturan evaluator.
+			label += "(mati)"
 		}
 		rinci = append(rinci, label)
 	}
@@ -223,9 +228,33 @@ func (p *Publisher) pairsFor(symbol string) []Pair {
 		// Semua permintaan di luar aturan: jangan mengevaluasi apa pun,
 		// tetapi juga jangan diam-diam kembali ke empat pasangan — itu
 		// membuat pemfilteran tampak tidak berfungsi.
+		//
+		// Kasus ini juga menangkap simbol yang seluruh switch-nya dimatikan
+		// (Opsi A): simbol tidak dievaluasi, dan dicatat sekali agar
+		// operator tahu ini disengaja, bukan bug.
+		p.catatDimatikanSemua(symbol)
 		return nil
 	}
 	return out
+}
+
+// catatDimatikanSemua menulis satu peringatan saat seluruh pasangan satu
+// simbol dimatikan, bukan satu baris tiap evaluasi.
+func (p *Publisher) catatDimatikanSemua(symbol string) {
+	p.mu.Lock()
+	if p.dimatikanSemua == nil {
+		p.dimatikanSemua = make(map[string]struct{})
+	}
+	_, sudah := p.dimatikanSemua[symbol]
+	p.dimatikanSemua[symbol] = struct{}{}
+	p.mu.Unlock()
+
+	if sudah {
+		return
+	}
+	p.log.Warn("seluruh pasangan simbol dimatikan",
+		"evt", "pairs.semua.mati", "symbol", symbol,
+		"akibat", "simbol tidak dievaluasi sampai switch dinyalakan lagi")
 }
 
 // evaluateSlot mengevaluasi satu slot lalu menerbitkan hasilnya.

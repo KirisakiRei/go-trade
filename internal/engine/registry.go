@@ -10,6 +10,16 @@ import (
 	"sync"
 )
 
+// PairPolicy adalah kebijakan pasangan timeframe untuk satu simbol.
+//
+// Restricted=false berarti simbol ini belum pernah diatur: engine memakai
+// seluruh pasangan bawaan evaluator. Restricted=true berarti Pairs bersifat
+// final — bila kosong, simbol ini sengaja tidak dievaluasi sama sekali.
+type PairPolicy struct {
+	Pairs      []Pair
+	Restricted bool
+}
+
 // Subscriber adalah satu Runner yang terhubung.
 type Subscriber struct {
 	ID         string
@@ -20,6 +30,10 @@ type Subscriber struct {
 	// Nil atau kosong berarti "semua pasangan" — perilaku lama dipertahankan
 	// agar klien yang belum mengirim pairs tidak berubah perilakunya.
 	Pairs []Pair
+	// SymbolPairs adalah kebijakan pasangan timeframe per simbol. Bila kosong
+	// atau simbol tidak ada di peta, engine jatuh ke Pairs di atas sehingga
+	// klien lama tetap berjalan seperti sebelumnya.
+	SymbolPairs map[string]PairPolicy
 	// SymbolFeeds memetakan simbol kanonik ke feed candle pilihan admin,
 	// mis. {"NAS100": "ICMARKETS"}. Simbol tanpa entri memakai pemetaan
 	// bawaan engine.
@@ -69,12 +83,43 @@ func (r *Registry) SetPairs(id string, pairs []Pair) bool {
 	return true
 }
 
+// SetSymbolPairs mengganti kebijakan pasangan timeframe per simbol satu
+// pelanggan. Kebijakan bersama-sama menggantikan Pairs untuk simbol yang
+// disebutkan; simbol lain tetap memakai Pairs lama.
+func (r *Registry) SetSymbolPairs(id string, sp map[string]PairPolicy) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.subs[id]
+	if !ok {
+		return false
+	}
+	s.SymbolPairs = normalizePairPolicies(sp)
+	return true
+}
+
+// kebijakanUntuk mengembalikan kebijakan satu pelanggan untuk satu simbol,
+// beserta penanda apakah kebijakan itu berasal dari SymbolPairs (per simbol)
+// atau jatuh ke Pairs global.
+//
+// Pairs global yang terisi diperlakukan sebagai pembatasan (restricted),
+// persis perilaku sebelum ada kebijakan per simbol. Hanya Pairs kosong yang
+// berarti "tidak membatasi".
+func (s *Subscriber) kebijakanUntuk(symbol string) (PairPolicy, bool) {
+	if policy, ok := s.SymbolPairs[symbol]; ok {
+		return policy, true
+	}
+	return PairPolicy{Pairs: s.Pairs, Restricted: len(s.Pairs) > 0}, false
+}
+
 // WantedPairs mengembalikan pasangan timeframe yang perlu dihitung untuk satu
 // simbol, hasil gabungan seluruh pelanggan yang memantau simbol itu.
 //
 // Hasil `false` berarti "tidak ada yang membatasi": engine memakai seluruh
 // pasangan evaluator. Ini terjadi bila belum ada pelanggan yang mengirim pairs,
 // yang memang perilaku awal engine.
+//
+// Bila hasilnya `true` dengan daftar kosong, seluruh pasangan simbol ini
+// sengaja dimatikan dan simbol tidak boleh dievaluasi (Opsi A).
 func (r *Registry) WantedPairs(symbol string) ([]Pair, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -85,13 +130,16 @@ func (r *Registry) WantedPairs(symbol string) ([]Pair, bool) {
 		if _, ok := s.Symbols[symbol]; !ok {
 			continue
 		}
-		if len(s.Pairs) == 0 {
+
+		policy, _ := s.kebijakanUntuk(symbol)
+		if !policy.Restricted {
 			// Satu pelanggan saja yang meminta semua pasangan membuat
-			// pembatasan tidak berlaku: sinyalnya harus tetap dihitung.
+			// pembatasan tidak berlaku untuk simbol ini.
 			return nil, false
 		}
+
 		adaPermintaan = true
-		for _, p := range s.Pairs {
+		for _, p := range policy.Pairs {
 			seen[p] = struct{}{}
 		}
 	}
@@ -134,6 +182,32 @@ func (r *Registry) WantedFeed(symbol string) string {
 }
 
 // normalizePairs membuang pasangan yang tidak lengkap dan duplikat.
+// normalizePairPolicies membakukan kebijakan per simbol: setiap daftar
+// dibersihkan dari pasangan separuh dan duplikat.
+//
+// Kebijakan restricted dengan daftar kosong TETAP dipertahankan (bukan dibuang),
+// karena artinya "seluruh pasangan simbol ini dimatikan" — bukan "tidak ada
+// kebijakan".
+func normalizePairPolicies(sp map[string]PairPolicy) map[string]PairPolicy {
+	if len(sp) == 0 {
+		return nil
+	}
+	out := make(map[string]PairPolicy, len(sp))
+	for symbol, policy := range sp {
+		if symbol == "" {
+			continue
+		}
+		out[symbol] = PairPolicy{
+			Pairs:      normalizePairs(policy.Pairs),
+			Restricted: policy.Restricted,
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func normalizePairs(pairs []Pair) []Pair {
 	if len(pairs) == 0 {
 		return nil

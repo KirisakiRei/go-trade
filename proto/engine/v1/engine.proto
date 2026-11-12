@@ -197,11 +197,25 @@ message SubscribeRequest {
   // mis. {"XAUUSD": "FOREXCOM", "NAS100": "ICMARKETS"}. Simbol tanpa entri
   // memakai pemetaan bawaan engine.
   map<string, string> symbol_feeds = 5;
+  // symbol_pairs memetakan simbol kanonik ke daftar pair yang memang diminta
+  // untuk simbol itu saja. Runner mengirim ini agar switch watch per simbol
+  // tidak bocor ke simbol lain. Field `pairs` (no. 3) tetap dikirim sebagai
+  // jalur kompatibilitas untuk engine lama.
+  map<string, SymbolPairs> symbol_pairs = 6;
 }
 
 message Pair {
   string htf = 1;
   string ltf = 2;
+}
+
+// SymbolPairs adalah kebijakan pair untuk satu simbol.
+// restricted = false berarti simbol ini belum pernah diatur, engine memakai
+// seluruh pair bawaan. restricted = true berarti daftar di `pairs` bersifat
+// final: bila kosong, simbol ini tidak dievaluasi sama sekali.
+message SymbolPairs {
+  repeated Pair pairs   = 1;
+  bool          restricted = 2;
 }
 
 message UnsubscribeRequest {

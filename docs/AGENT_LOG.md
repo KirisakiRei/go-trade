@@ -69,6 +69,30 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 
 ## ⬇️ DARI HUMAN KE HERMES
 
+### [2026-11-11] PERBAIKAN — Pair timeframe per simbol (switch `watch` tidak bocor antar simbol)
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di `develop` (belum di-deploy ke VPS 1)
+- **Ringkasan:**
+  - **Akar masalah:** `SubscribeRequest.Pairs` adalah satu daftar global untuk SEMUA simbol. Karena satu-satunya baris switch di DB adalah `USTEC · D·15M`, simbol lain (termasuk XAUUSD) ikut hanya dievaluasi pada `D·15M`. Log produksi: `"rinci":"... XAUUSD:1"` padahal UI meminta 4 pair untuk ILA 3.0.
+  - **Bug kedua (senyap):** `hitungPasangan()` membentuk fingerprint `metode:htf/ltf` — **tanpa simbol**. Akibatnya mengubah switch satu simbol bisa TIDAK mengubah fingerprint, sehingga sync ke engine tidak pernah terpicu (interval 2 menit).
+  - **Perbaikan:** kontrak gRPC baru `map<string, SymbolPairs> symbol_pairs = 6` dengan `SymbolPairs{ repeated Pair pairs = 1; bool restricted = 2; }`. Field lama `pairs = 3` **DIPERTAHANKAN** sebagai jalur rollback/kompatibilitas engine lama.
+  - **Semantik `restricted`:** `false` = simbol belum pernah diatur → engine memakai seluruh pair bawaan. `true` = daftar bersifat final; kosong berarti simbol sengaja **tidak dievaluasi** (Opsi A).
+  - Satu subscriber dengan `restricted=false` membatalkan pembatasan untuk simbol itu.
+  - WARN sekali per simbol `"evt":"pairs.semua.mati"` agar operator tahu simbol mati karena disengaja, bukan bug.
+- **File terdampak:**
+  - `proto/engine/v1/engine.proto` (+ `gen/engine/v1/engine.pb.go`)
+  - `internal/engine/registry.go` (`PairPolicy`, `Subscriber.SymbolPairs`, `SetSymbolPairs`, `WantedPairs` dirombak)
+  - `internal/engine/publisher.go` (`pairsFor` + WARN `pairs.semua.mati`; label denyut `(mati)`)
+  - `internal/grpcserver/server.go` (`kebijakanDari`, isi `SymbolPairs` di `Subscribe` + `StreamEvents`)
+  - `internal/engine/pasangan_test.go`, `internal/grpcserver/symbol_pairs_test.go` (baru)
+- **Verifikasi:** `go build ./...` hijau; `go test ./...` hijau; `engine_grpc.pb.go` **tidak berubah** (service tetap).
+- **Catatan untuk Hermes:**
+  - Branch `hermes` **tidak disentuh** sama sekali.
+  - **JANGAN hapus `pairs = 3`** — itu jalur rollback.
+  - `putuskanTimeframe()`, `slotDue()`, `menungguLTF()`, `latestCandleClose()` **tidak diubah** (sudah benar).
+  - **Urutan deploy wajib: Engine dulu, Runner kemudian.** Kalau kebalik, engine lama mengabaikan `symbol_pairs` diam-diam dan bug tetap ada tanpa gejala.
+
 ### [2026-11-11] PERBAIKAN — Empat PR Hermes digabung ke `develop`, scanner & jadwal lilin diselaraskan, engine live di VPS 1
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
