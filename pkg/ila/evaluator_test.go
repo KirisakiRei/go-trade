@@ -267,3 +267,65 @@ func TestWickPierceDoesNotMitigateFVG(t *testing.T) {
 		t.Fatalf("FVG seharusnya TERMITIGASI jika ekor menusuk jauh melampaui toleransi!")
 	}
 }
+
+// TestCISDOriginCanFormInPriorCandleRun memvalidasi bahwa origin deretan opposing leg
+// yang bersambung langsung diizinkan berawal dari candle sebelum Candle 5 (di dalam Candle 4 HTF).
+// Kasus riil EURUSD H4-M15: deretan naik dimulai jam 08:15 NY (Open 1.10766), mencapai puncak 09:15 NY,
+// dan candle 09:30 NY belum menembus 1.10766, baru candle 09:45 NY yang menembus by body.
+func TestCISDOriginCanFormInPriorCandleRun(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	sweepCandle := indicators.Candle{
+		Timestamp: now.Add(-4 * time.Hour), // 05:00 NY
+		High:      1.11029,
+		Low:       1.10757,
+		Open:      1.10946,
+		Close:     1.10891,
+		IsClosed:  true,
+	}
+	afterTime := now // 09:00 NY (Candle 5 start)
+
+	ltfCandles := []indicators.Candle{
+		// 08:00 NY: Bearish
+		{Timestamp: now.Add(-60 * time.Minute), Open: 1.10875, High: 1.10934, Low: 1.10757, Close: 1.10766, IsClosed: true},
+		// 08:15 NY: Bullish (TRUE ORIGIN!)
+		{Timestamp: now.Add(-45 * time.Minute), Open: 1.10766, High: 1.10885, Low: 1.10761, Close: 1.10852, IsClosed: true},
+		// 08:30 NY: Bullish
+		{Timestamp: now.Add(-30 * time.Minute), Open: 1.10852, High: 1.10899, Low: 1.10814, Close: 1.10868, IsClosed: true},
+		// 08:45 NY: Bullish
+		{Timestamp: now.Add(-15 * time.Minute), Open: 1.10868, High: 1.10898, Low: 1.10806, Close: 1.10891, IsClosed: true},
+		// --- BATAS CANDLE 5 (09:00 NY) ---
+		// 09:00 NY: Bullish (Lanjutan)
+		{Timestamp: now, Open: 1.10891, High: 1.10967, Low: 1.10886, Close: 1.10924, IsClosed: true},
+		// 09:15 NY: Bullish (Peak)
+		{Timestamp: now.Add(15 * time.Minute), Open: 1.10924, High: 1.10985, Low: 1.10916, Close: 1.10961, IsClosed: true},
+		// 09:30 NY: Bearish (Close 1.10825 < 1.10891 tetapi > 1.10766 -> BELUM CISD!)
+		{Timestamp: now.Add(30 * time.Minute), Open: 1.10961, High: 1.10968, Low: 1.10824, Close: 1.10825, IsClosed: true},
+	}
+
+	// 1. Pada candle 09:30 NY, CISD seharusnya BELUM terdeteksi karena origin sebenarnya adalah 1.10766
+	cisd1, _ := eval.DetectDynamicCISD(ltfCandles, "BEARISH", afterTime, sweepCandle)
+	if cisd1 == nil {
+		t.Fatalf("expected non-nil cisd object")
+	}
+	if cisd1.CISDLevel != 1.10766 {
+		t.Errorf("expected CISDLevel to be 1.10766 (from 08:15 NY), got %.5f", cisd1.CISDLevel)
+	}
+	if cisd1.Detected {
+		t.Errorf("candle 09:30 NY belum menembus 1.10766, seharusnya Detected=false!")
+	}
+
+	// 2. Tambahkan candle 09:45 NY (Close 1.10744 < 1.10766 -> SAH CISD!)
+	ltfCandles = append(ltfCandles, indicators.Candle{
+		Timestamp: now.Add(45 * time.Minute), Open: 1.10825, High: 1.10829, Low: 1.10740, Close: 1.10744, IsClosed: true,
+	})
+
+	cisd2, _ := eval.DetectDynamicCISD(ltfCandles, "BEARISH", afterTime, sweepCandle)
+	if cisd2 == nil || !cisd2.Detected {
+		t.Fatalf("candle 09:45 NY seharusnya memicu CISD Valid!")
+	}
+	if cisd2.EntryPrice != 1.10744 {
+		t.Errorf("expected EntryPrice=1.10744, got %.5f", cisd2.EntryPrice)
+	}
+}

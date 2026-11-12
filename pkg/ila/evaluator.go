@@ -404,6 +404,10 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			return nil, false // Low belum terbentuk di dalam Candle 5
 		}
 
+		// 3. Telusuri MUNDUR dari lowestIdx untuk mencari candle bearish PERTAMA dari deretan penurunan ini.
+		// Aturan Baku: Deretan candle lawan (opposing consecutive run) yang bersambung langsung
+		// menuju titik ekstrim diizinkan berawal dari candle sebelumnya (di dalam siklus sweep Candle 4),
+		// asalkan deretan tersebut murni bersambung tanpa terputus oleh candle lawan.
 		curr := lowestIdx
 		if candles[curr].Close > candles[curr].Open && curr > 0 {
 			curr--
@@ -411,8 +415,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		var firstBear *indicators.Candle
 		for curr >= 0 && candles[curr].Close < candles[curr].Open {
-			if !afterTime.IsZero() && candles[curr].Timestamp.Before(afterTime) {
-				break // Stop jika mundur melewati batas awal Candle 5!
+			if !sweepCandle.Timestamp.IsZero() && candles[curr].Timestamp.Before(sweepCandle.Timestamp) {
+				break // Tidak menyeberang sebelum lilin sweep HTF (Candle 4)
 			}
 			firstBear = &candles[curr]
 			curr--
@@ -420,7 +424,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		if firstBear == nil {
 			for k := lowestIdx; k >= 0; k-- {
-				if !afterTime.IsZero() && candles[k].Timestamp.Before(afterTime) {
+				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
 					break
 				}
 				if candles[k].Close < candles[k].Open {
@@ -431,7 +435,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		if firstBear == nil {
-			// Belum ada deretan candle bearish internal di dalam Candle 5
+			// Belum ada deretan candle bearish
 			return nil, false
 		}
 
@@ -496,6 +500,10 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 			return nil, false // High belum terbentuk di dalam Candle 5
 		}
 
+		// 3. Telusuri MUNDUR dari highestIdx untuk mencari candle bullish PERTAMA dari deretan kenaikan ini.
+		// Aturan Baku: Deretan candle lawan (opposing consecutive run) yang bersambung langsung
+		// menuju titik ekstrim diizinkan berawal dari candle sebelumnya (di dalam siklus sweep Candle 4),
+		// asalkan deretan tersebut murni bersambung tanpa terputus oleh candle lawan.
 		curr := highestIdx
 		if candles[curr].Close < candles[curr].Open && curr > 0 {
 			curr--
@@ -503,8 +511,8 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		var firstBull *indicators.Candle
 		for curr >= 0 && candles[curr].Close > candles[curr].Open {
-			if !afterTime.IsZero() && candles[curr].Timestamp.Before(afterTime) {
-				break // Stop jika mundur melewati batas awal Candle 5!
+			if !sweepCandle.Timestamp.IsZero() && candles[curr].Timestamp.Before(sweepCandle.Timestamp) {
+				break // Tidak menyeberang sebelum lilin sweep HTF (Candle 4)
 			}
 			firstBull = &candles[curr]
 			curr--
@@ -512,7 +520,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 
 		if firstBull == nil {
 			for k := highestIdx; k >= 0; k-- {
-				if !afterTime.IsZero() && candles[k].Timestamp.Before(afterTime) {
+				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
 					break
 				}
 				if candles[k].Close > candles[k].Open {
@@ -523,7 +531,7 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		if firstBull == nil {
-			// Belum ada deretan candle bullish internal di dalam Candle 5
+			// Belum ada deretan candle bullish
 			return nil, false
 		}
 
