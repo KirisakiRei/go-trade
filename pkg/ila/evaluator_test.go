@@ -169,32 +169,59 @@ func TestBodyBreakoutRejectedAsSweep(t *testing.T) {
 	}
 }
 
-func TestILASetupExpiredWhenCandle5Closed(t *testing.T) {
+// TestILASetupLanjutDiCandle6Running mengunci jendela eksekusi dinamis ILA 2.0:
+// setup TIDAK lagi kadaluarsa seketika Candle 5 berganti ke Candle 6. Jendela
+// pencarian CISD tetap terbuka selama Candle 6 masih berjalan.
+//
+// Alasan nyata (EURUSD H4-M15): candle M15 08:45 NY ditutup 09:00 NY menembus origin
+// CISD by body, tetapi feed H4 09:00:00 NY sudah memunculkan Candle 6 running,
+// sehingga setup dibatalkan tepat di detik entry seharusnya sah.
+func TestILASetupLanjutDiCandle6Running(t *testing.T) {
 	eval := NewEvaluator()
 	now := time.Now()
 
-	// Skenario: Candle 4 (Sweep) sudah tutup, Candle 5 sudah TUTUP tanpa CISD,
-	// dan sekarang kita sudah berada di Candle 6 (running).
+	// Candle 4 (Sweep) closed, Candle 5 SUDO closed tanpa CISD, sekarang di Candle 6 running.
 	htfCandles := []indicators.Candle{
 		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
 		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
 		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3
-		// Candle A (masuk FVG)
-		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},
-		// Candle B (Sweep Candle / Candle 4)
-		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},
-		// Candle C (Candle 5 SUDAH CLOSED tanpa sweep Candle B)
-		{Timestamp: now.Add(0), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},
-		// Candle D (Candle 6 running saat ini)
-		{Timestamp: now.Add(4 * time.Hour), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: false},
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},  // Candle A (masuk FVG)
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},  // Candle 4 (sweep)
+		{Timestamp: now.Add(0), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},               // Candle 5 closed
+		{Timestamp: now.Add(4 * time.Hour), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: false},  // Candle 6 running
+	}
+
+	setup := eval.EvaluateILA(htfCandles, nil, "H4", "M15", "XAUUSD")
+	if setup.Status == "WAIT_HTF_SWEEP" {
+		t.Fatalf("FAILED: setup tidak boleh kadaluarsa saat Candle 6 masih berjalan, dapat %s (%s)", setup.Status, setup.NextAction)
+	}
+	if setup.StopLoss != 4220 {
+		t.Fatalf("FAILED: SL harus dikunci di High Candle 5 (4220), dapat %.2f", setup.StopLoss)
+	}
+}
+
+// TestILASetupExpiredWhenCandle6Closed mengunci batas akhir jendela: setelah
+// Candle 6 CLOSED resmi tanpa CISD, setup barulah hangus.
+func TestILASetupExpiredWhenCandle6Closed(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},  // Candle A
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},  // Candle 4 (sweep)
+		{Timestamp: now.Add(0), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},               // Candle 5 closed
+		{Timestamp: now.Add(4 * time.Hour), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: true},   // Candle 6 CLOSED
 	}
 
 	setup := eval.EvaluateILA(htfCandles, nil, "H4", "M15", "XAUUSD")
 	if setup.Status != "WAIT_HTF_SWEEP" {
-		t.Fatalf("expected status WAIT_HTF_SWEEP (expired), got %s", setup.Status)
+		t.Fatalf("expected status WAIT_HTF_SWEEP (expired setelah Candle 6 closed), got %s", setup.Status)
 	}
 	if !strings.Contains(setup.NextAction, "kadaluarsa") {
-		t.Errorf("expected NextAction to contain 'kadaluarsa', got %s", setup.NextAction)
+		t.Errorf("expected NextAction mengandung 'kadaluarsa', got %s", setup.NextAction)
 	}
 }
 
@@ -624,5 +651,187 @@ func TestForexToleranceIsOnePip(t *testing.T) {
 	fvgsLewat := eval.FindFVGs(lewat)
 	if len(fvgsLewat) == 0 || !fvgsLewat[0].Mitigated {
 		t.Fatalf("EURUSD: tusukan 1.5 pip melampaui toleransi 1 pip, harus termitigasi")
+	}
+}
+
+// TestXAUUSDRegresiSweepFVGSebelumnya mengunci kasus nyata XAUUSD H4 (12-13 Nov).
+//
+// Data riil (jam WIB):
+//
+//	#53 14:00  O=3965.88 H=3972.51 L=3924.74 C=3954.01
+//	#54 18:00  O=3954.01 H=3955.51 L=3866.33 C=3870.07
+//	#55 22:00  O=3870.07 H=3887.64 L=3852.64 C=3882.88
+//	#56 02:00  O=3882.88 H=3886.93 L=3872.16 C=3877.36
+//	#57 06:00  O=3877.36 H=3916.74 L=3875.20 C=3915.86
+//	#58 10:00  O=3915.86 H=3923.20 L=3888.47 C=3900.61
+//	#59 14:00  O=3900.61 H=3905.50 L=3889.81 C=3896.15 (running)
+//
+// FVG-BEARISH 3887.64-3924.74 dibentuk C1=#53, C2=#54, C3=#55.
+// Candle #58 menyapu ekor #57 di dalam area FVG itu -> sweep BEARISH SAH.
+// Namun #58 SEKALIGUS membentuk FVG-BULLISH 3886.93-3888.47.
+//
+// Evaluator lama hanya memeriksa FVG aktif TERBARU (yang bullish), sehingga sweep
+// bearish yang sah diabaikan dan XAUUSD tidak pernah memunculkan alert SELL.
+// Evaluator harus mau memeriksa FVG sebelumnya bila FVG terbaru belum memberi konfirmasi.
+func TestXAUUSDRegresiSweepFVGSebelumnya(t *testing.T) {
+	eval := NewEvaluator()
+	base := time.Date(2026, 11, 12, 14, 0, 0, 0, time.UTC)
+
+	candle := func(jam int, o, h, l, c float64) indicators.Candle {
+		return indicators.Candle{
+			Timestamp: base.Add(time.Duration(jam) * time.Hour),
+			Open:      o, High: h, Low: l, Close: c, IsClosed: true,
+		}
+	}
+
+	htfCandles := []indicators.Candle{
+		candle(0, 3965.88, 3972.51, 3924.74, 3954.01),  // #53 C1 FVG Bearish
+		candle(4, 3954.01, 3955.51, 3866.33, 3870.07),  // #54 C2 displacement turun
+		candle(8, 3870.07, 3887.64, 3852.64, 3882.88),  // #55 C3 -> FVG Bearish 3887.64-3924.74
+		candle(12, 3882.88, 3886.93, 3872.16, 3877.36), // #56
+		candle(16, 3877.36, 3916.74, 3875.20, 3915.86), // #57 cPrev: High 3916.74 parkir di dalam FVG
+		candle(20, 3915.86, 3923.20, 3888.47, 3900.61), // #58 ck: sweep High #57 sekaligus bentuk FVG Bullish
+	}
+
+	running := indicators.Candle{
+		Timestamp: base.Add(24 * time.Hour), Open: 3900.61, High: 3905.50,
+		Low: 3889.81, Close: 3896.15, IsClosed: false, // #59 masih running
+	}
+	htfCandles = append(htfCandles, running)
+
+	// Pastikan prasyarat data benar: FVG bearish 3887.64-3924.74 harus terbentuk.
+	fvgs := eval.FindFVGs(htfCandles)
+	var adaBearish bool
+	for _, f := range fvgs {
+		if f.Type == FVGBearish && f.Bottom == 3887.64 && f.Top == 3924.74 {
+			adaBearish = true
+			if f.Mitigated {
+				t.Fatalf("prasyarat salah: FVG bearish 3887.64-3924.74 seharusnya belum termitigasi")
+			}
+		}
+	}
+	if !adaBearish {
+		t.Fatalf("prasyarat salah: FVG bearish 3887.64-3924.74 tidak terbentuk dari data uji")
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil {
+		t.Fatalf("FAILED: sweep nil; seharusnya terdeteksi BEARISH dari FVG sebelumnya")
+	}
+	if !sweep.Detected {
+		t.Fatalf("FAILED: sweep bearish sah dari FVG sebelumnya tidak terdeteksi (detected=false, detail: %s)", sweep.Details)
+	}
+	if sweep.Direction != "BEARISH" {
+		t.Fatalf("FAILED: arah sweep seharusnya BEARISH, dapat %s", sweep.Direction)
+	}
+	if sweep.SweepCandleIndex != 5 {
+		t.Fatalf("FAILED: sweep seharusnya terjadi di candle #58 (index 5), dapat index %d", sweep.SweepCandleIndex)
+	}
+	if sweep.FVG == nil || sweep.FVG.Top != 3924.74 {
+		t.Fatalf("FAILED: sweep harus mengacu ke FVG bearish 3887.64-3924.74")
+	}
+}
+
+// TestDuaFVGSweepTerlamaMenang mengunci aturan prioritas ILA 2.0: ketika dua FVG
+// aktif sama-sama memberi sweep SAH, yang dieksekusi adalah sweep yang terjadi
+// LEBIH DULU. Sesuai keputusan aturan: "sell yang terjadi duluan dieksekusi,
+// buy-nya dilewati, kecuali yang sell sudah stopped out".
+//
+// Susunan (n=10, filter sweep zombie hanya mengizinkan k >= n-3 = 7):
+//
+//	FVG BEARISH A = 1980..1998 (C1=3, C2=4, C3=5) -> disapu di candle idx7  (lebih awal)
+//	FVG BULLISH B = 1980..1985 (C1=5, C2=6, C3=7) -> disapu di candle idx9  (lebih akhir)
+//
+// Keduanya berbagi candle idx5 (C3 A sekaligus C1 B), formasi displacement
+// bersambung yang sah. Engine harus memilih BEARISH di idx7, bukan BULLISH di idx9.
+func TestDuaFVGSweepTerlamaMenang(t *testing.T) {
+	eval := NewEvaluator()
+	base := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	mk := func(jam int, o, h, l, c float64) indicators.Candle {
+		return indicators.Candle{Timestamp: base.Add(time.Duration(jam) * time.Hour), Open: o, High: h, Low: l, Close: c, IsClosed: true}
+	}
+
+	htfCandles := []indicators.Candle{
+		mk(0, 2010, 2015, 2000, 2008),  // idx0
+		mk(4, 2008, 2010, 1990, 1994),  // idx1
+		mk(8, 1994, 1998, 1990, 1995),  // idx2
+		mk(12, 1995, 2005, 1998, 2000), // idx3 C1 FVG A
+		mk(16, 2000, 2005, 1960, 1965), // idx4 C2 FVG A (displacement turun)
+		mk(20, 1965, 1980, 1975, 1978), // idx5 C3 FVG A (High 1980) sekaligus C1 FVG B
+		mk(24, 1978, 1990, 1981, 1987), // idx6 cPrev sweep A
+		mk(28, 1987, 1994, 1985, 1989), // idx7 SWEEP BEARISH A (High 1994 > 1990, Close 1989 <= 1990)
+		mk(32, 1989, 1993, 1985, 1991), // idx8 cPrev sweep B
+		mk(36, 1991, 1993, 1983, 1990), // idx9 SWEEP BULLISH B (Low 1983 < 1985, Close 1990 >= 1985)
+	}
+
+	// Prasyarat: dua FVG aktif harus benar-benar terbentuk dari data ini.
+	fvgs := eval.FindFVGs(htfCandles)
+	var adaA, adaB bool
+	for _, f := range fvgs {
+		if f.Mitigated {
+			continue
+		}
+		if f.Type == FVGBearish && f.Bottom == 1980 && f.Top == 1998 {
+			adaA = true
+		}
+		if f.Type == FVGBullish && f.Bottom == 1980 && f.Top == 1985 {
+			adaB = true
+		}
+	}
+	if !adaA || !adaB {
+		t.Fatalf("prasyarat salah: FVG bearish A=%v FVG bullish B=%v, keduanya harus aktif", adaA, adaB)
+	}
+
+	// Prasyarat: kedua FVG benar-benar menghasilkan sweep sah saat diuji terpisah.
+	for _, f := range fvgs {
+		if f.Mitigated {
+			continue
+		}
+		s := eval.detectSweepPadaFVG(htfCandles, fvgs, f, false)
+		if s == nil || !s.Detected {
+			t.Fatalf("prasyarat salah: FVG %s %.2f-%.2f seharusnya punya sweep sah", f.Type, f.Bottom, f.Top)
+		}
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("FAILED: seharusnya ada sweep sah terdeteksi")
+	}
+	if sweep.Direction != "BEARISH" {
+		t.Fatalf("FAILED: sweep bearish (idx7) terjadi lebih dulu dan harus dipilih; dapat %s (idx %d)",
+			sweep.Direction, sweep.SweepCandleIndex)
+	}
+	if sweep.SweepCandleIndex != 7 {
+		t.Fatalf("FAILED: candle sweep seharusnya idx7, dapat idx %d", sweep.SweepCandleIndex)
+	}
+}
+
+// TestFVGSebelumnyaBolehBerbagiCandle menjaga agar FVG sebelumnya yang berbagi
+// candle dengan FVG terbaru (C3 lama == C1 baru) tetap dianggap berurutan sah,
+// bukan dilewati sebagai FVG usang.
+func TestFVGSebelumnyaBolehBerbagiCandle(t *testing.T) {
+	eval := NewEvaluator()
+	base := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	mk := func(jam int, o, h, l, c float64) indicators.Candle {
+		return indicators.Candle{Timestamp: base.Add(time.Duration(jam) * time.Hour), Open: o, High: h, Low: l, Close: c, IsClosed: true}
+	}
+
+	htfCandles := []indicators.Candle{
+		mk(0, 2010, 2015, 2000, 2008),
+		mk(4, 2008, 2010, 1990, 1994),
+		mk(8, 1994, 1998, 1990, 1995),
+		mk(12, 1995, 2005, 1998, 2000), // C1 FVG A
+		mk(16, 2000, 2005, 1960, 1965), // C2 FVG A
+		mk(20, 1965, 1980, 1975, 1978), // C3 FVG A == C1 FVG B
+		mk(24, 1978, 1990, 1981, 1987), // cPrev
+		mk(28, 1987, 1994, 1985, 1989), // sweep bearish A
+	}
+
+	sweep := eval.DetectHTFIlaSweep(htfCandles)
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("FAILED: FVG sebelumnya yang berbagi candle harus tetap dievaluasi")
+	}
+	if sweep.Direction != "BEARISH" {
+		t.Fatalf("FAILED: arah harus BEARISH, dapat %s", sweep.Direction)
 	}
 }

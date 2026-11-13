@@ -69,6 +69,40 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 
 ## ⬇️ DARI HUMAN KE HERMES
 
+### [2026-11-14] PERBAIKAN — ILA 2.0: dua FVG (sweep terlama menang) + jendela eksekusi Candle 6 dengan SL Candle 5
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di `develop` (belum di-deploy ke VPS 1)
+
+#### Ringkasan
+1. **Dua FVG: sweep sah dari FVG sebelumnya tidak lagi dibuang (`pkg/ila/evaluator.go`).**
+   - **Akar masalah:** `DetectHTFIlaSweep` mengunci murni pada `activeFVGs[len-1]` (FVG aktif TERBARU). Satu candle HTF bisa sekaligus menutup sweep sah pada FVG lama **sambil** membentuk FVG baru di arah berlawanan, sehingga sweep yang sah hilang.
+   - **Kasus nyata XAUUSD H4 (12-13 Nov):** candle #58 menyapu ekor #57 di dalam FVG bearish `3887.64-3924.74`, tetapi candle #58 juga membentuk FVG bullish `3886.93-3888.47`. Karena hanya FVG terbaru (bullish) yang diperiksa, XAUUSD tidak pernah memunculkan alert SELL.
+   - **Perbaikan:** isi perulangan sweep dipindah apa adanya ke helper `detectSweepPadaFVG` (terbukti identik byte-per-byte), lalu `DetectHTFIlaSweep` menelusuri **maksimal 2 FVG aktif** (terbaru + kronologis sebelumnya) dan memilih **sweep TERLAMA** yang sah. Aturan: *sell yang terjadi lebih dulu dieksekusi, buy-nya dilewati*.
+   - **Filter kronologis memakai `>` bukan `>=`:** dua FVG sah boleh berbagi candle (C3 FVG lama = C1 FVG baru). Versi ketat `>=` sempat menjadi bug dan sudah ditangkap test.
+2. **Jendela eksekusi dinamis sampai Candle 6 (`pkg/ila/evaluator.go`).**
+   - **Akar masalah:** `if candle5Idx < lastHTFIdx` mematikan setup seketika Candle 5 berganti ke Candle 6. Kasus nyata EURUSD H4-M15: candle M15 08:45 NY ditutup 09:00 NY menembus origin CISD `1.10505` by body, tetapi feed H4 09:00:00 NY sudah memunculkan Candle 6 running, sehingga setup batal tepat di detik entry seharusnya sah.
+   - **Perbaikan:** kadaluarsa baru terjadi saat Candle 6 **CLOSED** tanpa CISD (`lastHTFIdx > candle5Idx+1 || (lastHTFIdx == candle5Idx+1 && !running)`).
+   - **SL dikunci High/Low Candle 5** saat di Candle 6, menggantikan `cisd.ExtremeSL`. Alasannya struktural: `ExtremeSL` di `DetectDynamicCISD` adalah ekstrem Candle 5 — titik yang membentuk CISD — sehingga SL di sana konsisten. `ExtremeSL` LTF tidak boleh menimpa lagi.
+   - **Koreksi klaim:** catatan asal menyebut SL Candle 5 "menghemat pips". Itu keliru — SL jadi **lebih lebar** dari `ExtremeSL` LTF, sehingga lot mengecil. Yang didapat adalah proteksi struktural, bukan hemat pips.
+3. **Catatan proses:** PR `feat/ila-dynamic-candle6-window-and-sl` ikut membawa perubahan `pkg/ila` lain yang sudah ditolak di `develop` (`activeFVGs[len-2]`, hapus toleransi spread, ganti `cPrev.High < Top` menjadi `cPrev.Close <= Top`) dan menyisakan hanya 9 test (develop 17). Karena itu **tidak di-merge**; hanya ide jendela Candle 6 + SL Candle 5 yang diambil dan ditulis ulang di atas `develop`.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (+135 / −12)
+- `pkg/ila/evaluator_test.go`
+
+#### Verifikasi
+- **21 test `pkg/ila` PASS** (17 lama + 4 baru). Test baru: `TestXAUUSDRegresiSweepFVGSebelumnya`, `TestDuaFVGSweepTerlamaMenang`, `TestFVGSebelumnyaBolehBerbagiCandle`, `TestILASetupLanjutDiCandle6Running`, `TestILASetupExpiredWhenCandle6Closed`.
+- `TestILASetupExpiredWhenCandle5Closed` diganti menjadi `TestILASetupLanjutDiCandle6Running` karena mengunci aturan yang sengaja diubah.
+- **Uji mutasi (semua tertangkap, kembali MERAH):** (a) batas kandidat 2→1; (b) pemilihan `Before`→`After`; (c) filter `>`→`>=`; (d) kembalikan `candle5Idx < lastHTFIdx`; (e) matikan penjangkaran SL Candle 5.
+- `go build ./...`, `go vet ./...`, `go test ./...` (20 paket) hijau.
+- **End-to-end data pasar nyata:** `go run ./cmd/cli -symbol XAUUSD -htf H4 -ltf M15` → `READY_TO_ENTRY` SELL pada FVG bearish `3887.64-3924.74`.
+- `pkg/sequence/` (ILA 3.0), `publisher.go`, dan jalur Runner **tidak disentuh**.
+
+#### Catatan untuk Hermes
+- Aturan body-break (`ck.Close <= cPrev.High` / `>= cPrev.Low`) **tidak boleh** dilonggarkan saat menelusuri dua FVG.
+- Filter sweep zombie `k < n-3` tetap dipertahankan. Perhatikan: saat Candle 6 sudah closed dan masuk Candle 7, sweep Candle 4 berada di `n-4` sehingga dibuang filter ini **sebelum** cek EXPIRED berjalan. Hasil akhirnya tetap benar (`WAIT_HTF_SWEEP`), tetapi pesannya "Menunggu candle masuk…" bukan "kadaluarsa". Jangan diubah tanpa menguji ulang keduanya.
+
 ### [2026-11-11] PERBAIKAN — Pair timeframe per simbol (switch `watch` tidak bocor antar simbol)
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
