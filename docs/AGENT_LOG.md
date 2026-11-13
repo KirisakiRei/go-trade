@@ -242,6 +242,29 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-13] FITUR & PERBAIKAN — Jendela Eksekusi Dinamis Melintasi Candle 6 & Penjangkaran SL di High/Low Candle 5
+- **Pelaku:** Hermes
+- **Tipe:** FITUR / PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Jendela Eksekusi Dinamis Melintasi Candle 6 (`pkg/ila/evaluator.go`):**
+   - **Akar Masalah:** Evaluator ILA sebelumnya memberlakukan batasan kaku `if candle5Idx < lastHTFIdx` di mana setup langsung dimatikan (`WAIT_HTF_SWEEP`) seketika saat Candle 5 berganti ke Candle 6. Hal ini memicu hilangnya eksekusi valid: pada EURUSD H4-M15 tadi siang, lilin M15 jam 08:45 NY ditutup tepat jam 09:00 NY di Close `1.10502` resmi menembus origin CISD `1.10505` *by body*. Namun karena feed HTF H4 pada detik 09:00:00 NY telah memunculkan lilin running baru jam 09:00 NY (Candle 6), engine langsung menganggap Candle 5 kadaluarsa dan membatalkan setup tepat di detik pembukaan eksekusi.
+   - **Arsitektur Dinamis Baru:**
+     - Jika lilin HTF baru (Candle 6 running) melakukan sweep baru terhadap Candle 5 di dalam FVG, sistem secara otomatis menanganinya sebagai `SweepInProgress` (`WAIT_HTF_CANDLE_CLOSE`) untuk menunggu penutupan resmi.
+     - Jika Candle 6 TIDAK melakukan sweep baru, jendela pencarian konfirmasi CISD tetap **DIBUKA AKTIF** selama Candle 6 berjalan (`lastHTFIdx <= candle5Idx + 1`).
+     - Kadaluarsa mutlak hanya terjadi jika Candle 6 telah selesai ditutup resmi tanpa konfirmasi CISD (masuk Candle 7, `lastHTFIdx > candle5Idx + 1`).
+2. **Penjangkaran Struktural Stop Loss Khusus Kasus Candle 6:**
+   - Sesuai kaidah disiplin Price Action, jika eksekusi terjadi di dalam jendela Candle 6, Stop Loss struktural dikunci pada titik ekstrim **High (Bearish) / Low (Bullish) dari Candle 5** (`c5.High` / `c5.Low`).
+   - Penjangkaran ini memberikan proteksi struktural yang sangat aman dari manipulasi likuiditas Candle 5, sekaligus menghemat pips dan memaksimalkan pencapaian R:R 1:2.0 – 1:2.3.
+3. **Unit Test Pengunci:**
+   - Ditambahkan `TestILASetupActiveInCandle6WithCandle5SL` di `pkg/ila/evaluator_test.go` untuk memvalidasi setup tetap aktif di Candle 6 running dan SL terkunci di High/Low Candle 5.
+   - Diperbarui `TestILASetupExpiredWhenCandle6Closed` untuk memvalidasi kedaluwarsa setelah Candle 6 ditutup resmi.
+
+#### Verifikasi
+- `go test -v -count=1 ./pkg/ila/...` PASS 100% (9/9 test).
+- `go test -v -count=1 ./pkg/risk/... ./pkg/indicators/... ./pkg/ila/...` PASS 100%.
+
 ### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
