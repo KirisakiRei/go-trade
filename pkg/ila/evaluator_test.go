@@ -169,24 +169,24 @@ func TestBodyBreakoutRejectedAsSweep(t *testing.T) {
 	}
 }
 
-func TestILASetupExpiredWhenCandle5Closed(t *testing.T) {
+func TestILASetupExpiredWhenCandle6Closed(t *testing.T) {
 	eval := NewEvaluator()
 	now := time.Now()
 
-	// Skenario: Candle 4 (Sweep) sudah tutup, Candle 5 sudah TUTUP tanpa CISD,
-	// dan sekarang kita sudah berada di Candle 6 (running).
+	// Skenario: Candle 4 (Sweep) sudah tutup, Candle 5 dan Candle 6 sudah TUTUP tanpa CISD,
+	// dan sekarang kita sudah berada di Candle 7 (running).
 	htfCandles := []indicators.Candle{
-		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
-		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
-		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3
+		{Timestamp: now.Add(-24 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3
 		// Candle A (masuk FVG)
-		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},
 		// Candle B (Sweep Candle / Candle 4)
-		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},
 		// Candle C (Candle 5 SUDAH CLOSED tanpa sweep Candle B)
-		{Timestamp: now.Add(0), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},
-		// Candle D (Candle 6 running saat ini)
-		{Timestamp: now.Add(4 * time.Hour), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: false},
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},
+		// Candle D (Candle 6 SUDAH CLOSED tanpa CISD -> Kadaluarsa!)
+		{Timestamp: now.Add(0), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: true},
 	}
 
 	setup := eval.EvaluateILA(htfCandles, nil, "H4", "M15", "XAUUSD")
@@ -195,6 +195,57 @@ func TestILASetupExpiredWhenCandle5Closed(t *testing.T) {
 	}
 	if !strings.Contains(setup.NextAction, "kadaluarsa") {
 		t.Errorf("expected NextAction to contain 'kadaluarsa', got %s", setup.NextAction)
+	}
+}
+
+func TestILASetupActiveInCandle6WithCandle5SL(t *testing.T) {
+	eval := NewEvaluator()
+	now := time.Now()
+
+	// Skenario: Candle 4 (Sweep) tutup di 4230, Candle 5 tutup dengan High 4220,
+	// dan Candle 6 sedang running dengan High 4215 (tidak sweep Candle 5).
+	// Jendela eksekusi harus TETAP AKTIF, dan Stop Loss dikunci di High Candle 5 (4220)!
+	htfCandles := []indicators.Candle{
+		{Timestamp: now.Add(-20 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
+		{Timestamp: now.Add(-16 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
+		{Timestamp: now.Add(-12 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3
+		// Candle A (masuk FVG)
+		{Timestamp: now.Add(-8 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},
+		// Candle B (Sweep Candle / Candle 4: High 4230)
+		{Timestamp: now.Add(-4 * time.Hour), Open: 4180, High: 4230, Low: 4175, Close: 4190, IsClosed: true},
+		// Candle C (Candle 5: High 4220)
+		{Timestamp: now.Add(0), Open: 4190, High: 4220, Low: 4180, Close: 4210, IsClosed: true},
+		// Candle D (Candle 6 running saat ini)
+		{Timestamp: now.Add(4 * time.Hour), Open: 4210, High: 4215, Low: 4205, Close: 4212, IsClosed: false},
+	}
+
+	// 1. Tanpa CISD -> Status WAIT_LTF_CISD dan Stop Loss = High Candle 5 (4220)
+	setupNoCISD := eval.EvaluateILA(htfCandles, nil, "H4", "M15", "XAUUSD")
+	if setupNoCISD.Status != "WAIT_LTF_CISD" {
+		t.Fatalf("expected status WAIT_LTF_CISD in Candle 6, got %s", setupNoCISD.Status)
+	}
+	if setupNoCISD.StopLoss != 4220.0 {
+		t.Errorf("expected StopLoss to be Candle 5 High (4220.0), got %.2f", setupNoCISD.StopLoss)
+	}
+
+	// 2. Dengan CISD yang terbentuk di akhir Candle 5 / Candle 6 -> Status READY_TO_ENTRY, SL = 4220.0
+	ltfCandles := []indicators.Candle{
+		// origin di dalam Candle 5:
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4205, High: 4218, Low: 4200, Close: 4215, IsClosed: true},
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4215, High: 4220, Low: 4210, Close: 4218, IsClosed: true},
+		// break candle:
+		{Timestamp: now.Add(1 * time.Hour), Open: 4218, High: 4218, Low: 4195, Close: 4200, IsClosed: true},
+	}
+
+	setupWithCISD := eval.EvaluateILA(htfCandles, ltfCandles, "H4", "M15", "XAUUSD")
+	if setupWithCISD.Status != "READY_TO_ENTRY" {
+		t.Fatalf("expected status READY_TO_ENTRY in Candle 6, got %s", setupWithCISD.Status)
+	}
+	if setupWithCISD.StopLoss != 4220.0 {
+		t.Errorf("expected StopLoss to be Candle 5 High (4220.0), got %.2f", setupWithCISD.StopLoss)
+	}
+	if !setupWithCISD.PassedMinRR {
+		t.Errorf("expected PassedMinRR to be true")
 	}
 }
 

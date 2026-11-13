@@ -625,28 +625,43 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 		return setup
 	}
 
-	// 2. Batasan Jendela Waktu Candle 5 & Status EXPIRED:
+	// 2. Batasan Jendela Waktu Eksekusi Dinamis (Candle 5 & Candle 6):
+	// Sesuai kaidah dinamis:
+	// - Jika lilin HTF baru (Candle 6) menyapu lilin Candle 5 di dalam FVG, DetectHTFIlaSweep di atas
+	//   otomatis mendeteksinya sebagai SweepInProgress (WAIT_HTF_CANDLE_CLOSE).
+	// - Jika Candle 6 TIDAK melakukan sweep baru, jendela pencarian CISD tetap DIBUKA selama Candle 6 running.
+	// - Khusus kasus Candle 6: Stop Loss dikunci pada titik ekstrim High/Low Candle 5 (lebih hemat & presisi).
+	// - Jika Candle 6 sudah CLOSED resmi tanpa CISD (masuk Candle 7, lastHTFIdx > candle5Idx + 1), barulah setup hangus (EXPIRED).
 	lastHTFIdx := len(htfCandles) - 1
 	sweepIdx := sweep.SweepCandleIndex
 	candle5Idx := sweepIdx + 1
 
-	// KASUS 2: Candle 5 sudah CLOSED resmi (kita sudah berada di Candle 6 atau lebih)
-	// Jika Candle 5 tidak melakukan sweep baru terhadap Candle 4, siklus sweep hangus/expired.
-	if candle5Idx < lastHTFIdx {
+	if lastHTFIdx > candle5Idx+1 || (lastHTFIdx == candle5Idx+1 && htfCandles[lastHTFIdx].IsClosed) {
 		setup.Status = "WAIT_HTF_SWEEP"
-		setup.NextAction = fmt.Sprintf("⏳ Setup sweep di %s telah kadaluarsa (Candle 5 closed tanpa CISD). Menunggu pembentukan sweep baru.", htfName)
-		setup.Summary = fmt.Sprintf("Siklus sweep %s hangus. Harga telah melewati jendela Candle 5.", htfName)
+		setup.NextAction = fmt.Sprintf("⏳ Setup sweep di %s telah kadaluarsa (melewati batas toleransi Candle 6 tanpa CISD). Menunggu pembentukan sweep baru.", htfName)
+		setup.Summary = fmt.Sprintf("Siklus sweep %s hangus. Harga telah melewati jendela Candle 6.", htfName)
 		return setup
 	}
 
-	// KASUS 1: Kita sedang aktif berada di Candle 5 (candle5Idx == lastHTFIdx)
 	// Jendela pencarian CISD di LTF dimulai dari saat candle sweep HTF (Candle 4) resmi CLOSED
 	// (yaitu sweep.SweepCandle.Timestamp + htfDur) hingga candle yang sedang berjalan.
-	// Stop Loss struktural adalah ekor ekstrem dari Candle Sweep (Candle 4).
+	// Stop Loss struktural default adalah ekor ekstrem dari Candle Sweep (Candle 4).
 	htfDur := timeframeDuration(htfName)
 	entryCandleStart := sweep.SweepCandle.Timestamp.Add(htfDur)
 	setup.StopLoss = sweep.StopLoss
 	setup.TakeProfit = sweep.TargetDOL
+
+	// Khusus kasus Candle 6 running (lastHTFIdx == candle5Idx + 1):
+	// Stop Loss struktural dikunci di titik ekstrim High (Sell) / Low (Buy) Candle 5
+	isCandle6 := lastHTFIdx == candle5Idx+1
+	if isCandle6 && candle5Idx >= 0 && candle5Idx < len(htfCandles) {
+		c5 := htfCandles[candle5Idx]
+		if sweep.Direction == "BEARISH" && c5.High > 0 {
+			setup.StopLoss = c5.High
+		} else if sweep.Direction == "BULLISH" && c5.Low > 0 {
+			setup.StopLoss = c5.Low
+		}
+	}
 
 	// 3. Evaluate LTF for CISD murni di dalam jendela waktu setelah sweep HTF closed
 	cisd, invalidated := e.DetectDynamicCISD(ltfCandles, sweep.Direction, entryCandleStart, sweep.SweepCandle)
@@ -657,22 +672,33 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 		return setup
 	}
 
+	// Jika di Candle 6 dan cisd terbentuk, pastikan ExtremeSL memakai High/Low Candle 5
+	if isCandle6 && cisd != nil {
+		cisd.ExtremeSL = setup.StopLoss
+	}
+
 	if cisd == nil || !cisd.Detected {
 		setup.Status = "WAIT_LTF_CISD"
 		setup.CISD = cisd
 		if cisd != nil {
-			setup.StopLoss = cisd.ExtremeSL
+			if !isCandle6 {
+				setup.StopLoss = cisd.ExtremeSL
+			}
 			digits := 2
 			if strings.Contains(symbol, "EUR") || strings.Contains(symbol, "GBP") || strings.Contains(symbol, "AUD") {
 				digits = 5
 			}
 			fStr := fmt.Sprintf("%%.%df", digits)
 			cisdStr := fmt.Sprintf(fStr, cisd.CISDLevel)
-			slStr := fmt.Sprintf(fStr, cisd.ExtremeSL)
+			slStr := fmt.Sprintf(fStr, setup.StopLoss)
 			setup.NextAction = fmt.Sprintf("⏳ Level CISD Valid di %s (SL: %s). Menunggu closed candle %s menembus level tersebut by body.", cisdStr, slStr, ltfName)
 			setup.Summary = fmt.Sprintf("HTF %s sweep valid. Menunggu CISD %s di level %s (SL: %s).", htfName, ltfName, cisdStr, slStr)
 		} else {
-			setup.NextAction = fmt.Sprintf("⏳ HTF %s Sweep FVG resmi CLOSED! Saat ini di Candle 5 (SL: %s), menunggu pembentukan CISD di %s.", htfName, formatILAVal(setup.StopLoss), ltfName)
+			candleWindowName := "Candle 5"
+			if isCandle6 {
+				candleWindowName = "Candle 6 (SL: High/Low Candle 5)"
+			}
+			setup.NextAction = fmt.Sprintf("⏳ HTF %s Sweep FVG resmi CLOSED! Saat ini di %s (SL: %s), menunggu pembentukan CISD di %s.", htfName, candleWindowName, formatILAVal(setup.StopLoss), ltfName)
 			setup.Summary = fmt.Sprintf("Internal Liquidity FVG %s sudah disapu (%s). Target: %s. Menunggu CISD di %s.", htfName, sweep.Direction, formatILAVal(sweep.TargetDOL), ltfName)
 		}
 		return setup
@@ -682,7 +708,9 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 	setup.CISD = cisd
 	setup.Status = "READY_TO_ENTRY"
 	setup.EntryPrice = cisd.EntryPrice
-	setup.StopLoss = cisd.ExtremeSL
+	if !isCandle6 && cisd.ExtremeSL > 0 {
+		setup.StopLoss = cisd.ExtremeSL
+	}
 
 	// Risk & Reward calculation (Opsi A: DOL-Bounded Clamping antara 1:2.0 s.d. 1:2.3 R:R)
 	slDist := math.Abs(setup.EntryPrice - setup.StopLoss)
