@@ -69,6 +69,76 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 
 ## ⬇️ DARI HUMAN KE HERMES
 
+### [2026-11-15] PERBAIKAN — ILA 2.0: C2 Closure, ERL 3-candle, invalidasi IRL berbasis close
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di branch `revisi-ila-2` (belum di-merge ke `develop`, belum di-deploy)
+
+#### Latar belakang
+Trader pemilik ILA 2.0 menyerahkan 4 dokumen baku (`key-level-erl.md`, `key-level-irl.md`, `c2-closure-erl.md`, `c2-closure-irl.md`) yang mendefinisikan **C2 Closure** pada key level ERL dan IRL. Implementasi `pkg/ila` belum mengikuti dokumen itu, sehingga menolak setup yang sah.
+
+**Dua kasus nyata XAUUSD H4 yang dikonfirmasi trader sebagai setup SELL sah, tetapi ditolak engine:**
+
+| Kasus | Data | Hasil engine lama |
+|---|---|---|
+| **28 Aug 2026** | FVG bearish `4471.71-4589.18`. C1 = 06:00 (Low 4589.18), C2 = 10:00 (O 4604.94 → C 4469.52), C3 = 14:00 (High 4471.71). Candle 30 Aug 18:00: H 4472.14, L 4434.81, C 4440.30. Pasar tutup Jumat sehingga tidak ada candle perantara. | `Detected=false` |
+| **11 Sep 2026** | FVG bearish `4400.32-4405.77`. C1 = 09 Sep 22:00, C2 = 10 Sep 02:00, C3 = 10 Sep 06:00 (High 4400.32). Candle 11 Sep 10:00: H 4402.67, L 4352.06, C 4358.36. | `Detected=false` |
+
+**Akar masalah:** engine membandingkan dengan **high/low candle TEPAT SEBELUMNYA** (`ck.High > cPrev.High`, `ck.Close <= cPrev.High`) dan mensyaratkan candle sebelumnya sudah berada di dalam zona (`cPrev.High >= Bottom && cPrev.High < Top`). Dokumen tidak memakai kedua syarat itu; dokumen membandingkan dengan **LEVEL ACUAN FVG yang bergeser**.
+
+#### Perubahan (5 commit)
+
+1. **`07811a3` — Invalidasi FVG berbasis close.**
+   - Field baru `FVG.Invalidated`, `InvalidatedIndex`, `InvalidatedTime` (dokumen `key-level-irl.md` §3: invalidasi HANYA dari close yang menembus batas terjauh zona).
+   - **Sengaja dipisah** dari `Mitigated` (wick + toleransi spread) yang tetap dipakai menyaring kandidat sweep, sehingga perilaku entry lama tidak berubah.
+
+2. **`22967d4` — Detektor ERL 3-candle mandiri (`pkg/ila/erl.go`).**
+   - `FindSwingERL` (pembentukan saja), `SwingERLStatus` (invalidasi close), `LatestSwingERL`, `ERLBiasOf`.
+   - **Tidak memakai `pkg/keylevels`** — paket itu milik ILA 3.0 dengan fractal 5-bar + mitigasi wick. Dua engine, dua rules, harus terpisah.
+   - `ERLBiasOf` memakai swing **TERAKHIR**, bukan swing terakhir yang masih valid: close yang menembus level swing memang men-invalidasi swing itu, dan justru itulah tanda bias terkuat.
+
+3. **`cabaccc` — C2 IRL/ERL memakai sumber tunggal invalidasi.**
+   - `EvaluateC2IRL` membaca `FVG.Invalidated`; `EvaluateC2ERL` memanggil `SwingERLStatus`. Tidak ada aturan invalidasi yang dikodekan dua kali.
+   - **Urutan 4 (ACUAN BERGESER)** kini cabang tersendiri: candle menyentuh acuan, close melewatinya tetapi masih di zona → C2 lama gugur, acuan pindah ke high/low candle itu.
+   - `EvaluateC2ERL` menerima `SwingERL` utuh agar indeks candle kanan tidak bisa salah pasang.
+
+4. **`f8807a5` — Status C2 & bias ERL di ringkasan (additive).**
+   - `HTFSweep.C2Status` / `C2Detail`, `ILASetup.ERLBias`.
+   - `detectSweepPadaFVG` jadi wrapper tipis di atas `detectSweepPadaFVGInti` (logika sweep lama, tanpa perubahan). Field C2 hanya ditempel, **tidak pernah dibaca keputusan entry**.
+
+5. **`d59e936` — Sweep memakai definisi C2 Closure draft.**
+   - Pembanding sweep menjadi `acuan`, dihitung dari candle 3 sampai `k-1` dengan aturan Urutan 3 + Urutan 4.
+   - Syarat lama "candle sebelumnya wajib di dalam zona" dihapus (tidak ada di dokumen).
+   - **Dua test lama diubah atas keputusan pemilik sistem (opsi A):** `TestFakeSweepCandle3Rejected` → `TestSweepLangsungSetelahCandle3Diterima`, dan `TestSingleFVGStillRejectsCandle3Sweep` → `TestSingleFVGSweepAcuanDiterima`.
+
+#### Kenapa dua kasus lolosnya lewat jalur berbeda (penting)
+
+- **Kasus 28 Aug** lolos karena candle s=3 (30 Aug 18:00) langsung menyapu acuan awal `4471.71` (high 4472.14) dan ditolak (close 4440.30). Yang berperan di sini adalah **penghapusan syarat "parkir di zona"**.
+- **Kasus 11 Sep** lolos karena candle s=4 (high `4402.60`) menyentuh acuan `4400.32` lalu **acuan bergeser** ke `4402.60`; candle s=9 (high `4402.67`) menyapu acuan baru itu dan ditolak. Yang berperan di sini adalah **Urutan 4 (acuan bergeser)**.
+
+#### File Terdampak
+- `pkg/ila/types.go` (+`Invalidated*`, `C2Status`, `C2Detail`, `ERLBias`)
+- `pkg/ila/evaluator.go` (`FindFVGs` + invalidasi close; `detectSweepPadaFVG` wrapper; sweep pakai `acuan`; `EvaluateILA` isi `ERLBias`)
+- `pkg/ila/erl.go` (baru)
+- `pkg/ila/c2.go` (baru, lalu dirapikan)
+- `pkg/ila/evaluator_test.go` (2 test diubah)
+- Test baru: `invalidated_test.go`, `erl_test.go`, `c2_urutan4_test.go`, `c2_integrasi_test.go`, `c2_kasus_h4_test.go`
+
+#### Verifikasi
+- **69 test `pkg/ila` PASS** (baseline 38 → 69).
+- **Bukti MERAH lebih dulu:** kedua kasus H4 dijalankan dengan logika lama dan terbukti `Detected=false` sebelum diperbaiki, lalu `Detected=true` sesudahnya.
+- **Uji mutasi (semua tertangkap):** (a) invalidasi IRL pakai wick bukan close; (b) invalidasi ERL pakai wick; (c) `mid.Low <` → `<=`; (d) candle kanan running diabaikan; (e) hapus Urutan 4; (f) close tepat di acuan dianggap C2; (g) acuan awal pakai batas zona bukan high/low C3; (h) kembalikan `cPrev.High` sebagai pembanding → Kasus 11 Sep MERAH lagi.
+- **Pagar anti-regresi:** `TestSweepEntryTidakBerubah` (wrapper vs fungsi inti) dan `TestSweepC2StatusTidakDibaca` (mengubah `C2Status` manual tidak mengubah keputusan).
+- `go build ./pkg/... ./internal/... ./cmd/...` dan `go vet ./pkg/ila/` bersih.
+- `pkg/keylevels/` dan `pkg/sequence/` **tidak disentuh**.
+
+#### Catatan penting
+- **`TestPasangan*` di `internal/engine` GAGAL, tetapi sudah gagal di `develop` sebelum perubahan ini** (diverifikasi lewat `git worktree` pada commit `e7cbc3b`). Bukan regresi dari pekerjaan ini.
+- Syarat "candle sebelumnya wajib di dalam zona" **dihapus permanen**. Konsekuensinya lebih banyak setup lolos. Ini keputusan pemilik sistem (opsi A), bukan asumsi agent.
+- Peran ERL di ILA 2.0 saat ini **hanya bias** (informatif). Belum memicu entry dan belum memfilter entry.
+
+---
+
 ### [2026-11-14] PERBAIKAN — ILA 2.0: dua FVG (sweep terlama menang) + jendela eksekusi Candle 6 dengan SL Candle 5
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
