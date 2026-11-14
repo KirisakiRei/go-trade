@@ -64,6 +64,13 @@ type HTFSweep struct {
 	StopLoss         float64           `json:"stop_loss"`  // Low (Buy) or High (Sell) of Candle 5 / current candle
 	TargetDOL        float64           `json:"target_dol"` // Draw on Liquidity (SSL / BSL)
 	Details          string            `json:"details"`
+
+	// C2Status dan C2Detail adalah STATUS PELENGKAP C2 Closure pada FVG acuan.
+	// Sifatnya informatif: tidak ada keputusan entry yang membaca field ini.
+	// Tujuannya agar hasil evaluasi engine bisa dibandingkan langsung dengan
+	// pembacaan chart manual memakai dokumen baku ILA 2.0.
+	C2Status C2Status `json:"c2_status,omitempty"`
+	C2Detail string   `json:"c2_detail,omitempty"`
 }
 
 // CISD represents Change In State of Delivery on LTF (body breaks body).
@@ -93,6 +100,12 @@ type ILASetup struct {
 	TakeProfit  float64   `json:"take_profit"`
 	RiskReward  float64   `json:"risk_reward"`
 	PassedMinRR bool      `json:"passed_min_rr"`
+
+	// ERLBias adalah bias dari Key Level ERL (Swing High / Swing Low 3 candle).
+	// Peran ERL di ILA 2.0 saat ini hanya sebagai PENENTU BIAS: tidak memicu
+	// entry dan tidak memfilter entry. Sifatnya informatif.
+	ERLBias string `json:"erl_bias,omitempty"`
+
 	NextAction  string    `json:"next_action"`
 	Summary     string    `json:"summary"`
 	EvaluatedAt time.Time `json:"evaluated_at"`

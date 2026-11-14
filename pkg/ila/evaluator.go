@@ -320,11 +320,26 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 	}
 }
 
-// detectSweepPadaFVG menjalankan aturan sweep ILA 2.0 untuk SATU FVG acuan.
-// Isi fungsi ini adalah logika yang sebelumnya berada langsung di DetectHTFIlaSweep,
-// dipindahkan tanpa perubahan perilaku agar tiap FVG dapat dievaluasi terpisah.
-// Mengembalikan nil bila FVG tidak dapat menghasilkan apa pun (mis. sudah termitigasi).
+// detectSweepPadaFVG menjalankan aturan sweep ILA 2.0 untuk SATU FVG acuan,
+// lalu menempelkan status C2 Closure sebagai informasi pelengkap.
+//
+// Pembagian tugasnya sengaja tegas: detectSweepPadaFVGInti memutuskan sweep
+// (Detected / Direction / StopLoss / TargetDOL) persis seperti sebelumnya, dan
+// wrapper ini HANYA menambah field C2Status/C2Detail. Tidak ada satu pun
+// keputusan entry yang dibaca dari C2, sehingga perilaku live tidak berubah.
 func (e *Evaluator) detectSweepPadaFVG(candles []indicators.Candle, fvgs []FVG, fvg FVG, isDoubleFVG bool) *HTFSweep {
+	sweep := e.detectSweepPadaFVGInti(candles, fvgs, fvg, isDoubleFVG)
+	if sweep == nil {
+		return nil
+	}
+	c2 := EvaluateC2IRL(fvg, candles)
+	sweep.C2Status = c2.Status
+	sweep.C2Detail = c2.Detail
+	return sweep
+}
+
+// detectSweepPadaFVGInti adalah logika sweep asli tanpa perubahan perilaku.
+func (e *Evaluator) detectSweepPadaFVGInti(candles []indicators.Candle, fvgs []FVG, fvg FVG, isDoubleFVG bool) *HTFSweep {
 	n := len(candles)
 	latestFVG := fvg
 
@@ -746,6 +761,9 @@ func (e *Evaluator) EvaluateILA(htfCandles, ltfCandles []indicators.Candle, htfN
 		Bias:        "NEUTRAL",
 		Status:      "WAIT_HTF_SWEEP",
 		EvaluatedAt: time.Now().UTC(),
+		// Bias ERL bersifat informasi (Swing High/Low 3 candle). Tidak dipakai
+		// memutuskan status maupun entry; lihat catatan di ERLBiasOf.
+		ERLBias: ERLBiasOf(htfCandles),
 	}
 
 	// 1. Evaluate HTF
