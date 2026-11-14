@@ -354,19 +354,53 @@ func (e *Evaluator) detectSweepPadaFVGInti(candles []indicators.Candle, fvgs []F
 			continue
 		}
 
-		// 2. PENCEGAHAN SWEEP PALSU TERHADAP CANDLE 3:
-		// Pada Single FVG biasa, minimal harus ada 1 candle acuan yang masuk dan parkir di dalam FVG lebih dulu.
-		// Namun pada Double FVG (Consecutive Displacement), Candle 3 pembatas FVG terbaru SAH disapu
-		// oleh candle berikutnya saat harga retrace masuk ke FVG.
+		// 2. CANDLE ACUAN HARUS ADA:
+		// Candle k butuh minimal satu candle setelah candle 3 FVG untuk diuji
+		// sebagai acuan. Dokumen baku TIDAK mensyaratkan candle k-1 harus sudah
+		// berada di dalam zona; yang diuji adalah LEVEL ACUAN FVG, dan acuan itu
+		// sudah tersedia begitu candle 3 tertutup.
+		//
+		// Syarat lama "k-1 == Candle3Index && !isDoubleFVG -> tolak" sengaja
+		// dihapus: pada XAUUSD H4 28 Aug, candle setelah candle 3 langsung menyapu
+		// acuan dengan sah (pasar tutup Jumat sehingga tidak ada candle di antara),
+		// dan dokumen menyatakan setup itu valid.
 		if k-1 < latestFVG.Candle3Index {
-			continue
-		}
-		if k-1 == latestFVG.Candle3Index && !isDoubleFVG {
 			continue
 		}
 
 		ck := candles[k]
 		cPrev := candles[k-1] // Bersebelahan langsung (adjacent)
+
+		// LEVEL ACUAN menurut dokumen baku ILA 2.0 (c2-closure-irl.md).
+		//
+		// Dokumen menguji sapuan terhadap LEVEL ACUAN FVG, bukan terhadap high/low
+		// candle tepat sebelumnya. Acuan itu BERGESER setiap kali sebuah candle
+		// menyentuhnya lalu close melewatinya tetapi masih di dalam zona
+		// (Urutan 4), dan berpindah ke high/low candle C2 terakhir (Urutan 3).
+		//
+		// Dihitung pada irisan candle sampai k-1 saja: candle k sendiri adalah
+		// candle yang sedang diuji, sehingga status C2-nya belum boleh dipakai.
+		acuan := referenceAwalIRL(latestFVG, candles)
+		for s := latestFVG.Candle3Index + 1; s < k; s++ {
+			cs := candles[s]
+			if !cs.IsClosed {
+				break
+			}
+			if latestFVG.Type == FVGBearish {
+				if cs.High < acuan {
+					continue // tidak menyentuh acuan, diabaikan
+				}
+				// Close di bawah acuan -> C2; acuan pindah ke high candle itu.
+				// Close di atas acuan namun masih di dalam zona -> C2 gugur,
+				// acuan tetap bergeser ke high candle itu (Urutan 4).
+				acuan = cs.High
+				continue
+			}
+			if cs.Low > acuan {
+				continue
+			}
+			acuan = cs.Low
+		}
 
 		// 0. Cek apakah FVG sudah terisi/tertutup penuh (100% Fully Filled/Mitigated)
 		// Toleransi spread dipakai sama seperti di FindFVGs, supaya FVG yang masih hidup
@@ -378,14 +412,18 @@ func (e *Evaluator) detectSweepPadaFVGInti(candles []indicators.Candle, fvgs []F
 			return nil // Bullish FVG sudah tertutup penuh hingga dasar (termitigasi)
 		}
 
-		// 1. BEARISH ILA SWEEP:
+		// BEARISH ILA SWEEP (definisi C2 Closure):
 		// - latestFVG is Bearish
-		// - cPrev wick must already be inside FVG: cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top
 		// - ck enters FVG: ck.High >= latestFVG.Bottom
-		// - ck sweeps previous ADJACENT wick inside FVG: ck.High > cPrev.High
+		// - ck menyapu LEVEL ACUAN: ck.High > acuan
 		// - ck does NOT close above FVG top (displacement holds): ck.Close <= latestFVG.Top
-		// - WICK SWEEP ONLY (NOT BODY BREAKOUT): ck body must close AT OR BELOW cPrev.High: ck.Close <= cPrev.High
-		if latestFVG.Type == FVGBearish && cPrev.High >= latestFVG.Bottom && cPrev.High < latestFVG.Top && ck.High >= latestFVG.Bottom && ck.High > cPrev.High && ck.Close <= latestFVG.Top && ck.Close <= cPrev.High {
+		// - ck ditolak: close kembali di bawah acuan
+		//
+		// Perubahan dari logika lama: pembanding adalah `acuan` (level FVG yang
+		// bergeser), bukan `cPrev.High`. Syarat "candle sebelumnya wajib sudah di
+		// dalam zona" juga dihapus karena dokumen tidak memintanya. Kedua hal ini
+		// yang membuat setup sah seperti XAUUSD H4 11 Sep ditolak sistem lama.
+		if latestFVG.Type == FVGBearish && ck.High >= latestFVG.Bottom && ck.High > acuan && ck.Close <= latestFVG.Top && ck.Close < acuan {
 			ssl := latestFVG.Bottom
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].Low < ssl {
@@ -442,14 +480,13 @@ func (e *Evaluator) detectSweepPadaFVGInti(candles []indicators.Candle, fvgs []F
 			}
 		}
 
-		// 2. BULLISH ILA SWEEP:
+		// BULLISH ILA SWEEP (definisi C2 Closure, cermin dari sisi bearish):
 		// - latestFVG is Bullish
-		// - cPrev wick must already be inside FVG: cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom
 		// - ck enters FVG: ck.Low <= latestFVG.Top
-		// - ck sweeps previous wick low inside FVG: ck.Low < cPrev.Low
+		// - ck menyapu LEVEL ACUAN: ck.Low < acuan
 		// - ck does NOT close below FVG bottom: ck.Close >= latestFVG.Bottom
-		// - WICK SWEEP ONLY (NOT BODY BREAKDOWN): ck body must close AT OR ABOVE cPrev.Low: ck.Close >= cPrev.Low
-		if latestFVG.Type == FVGBullish && cPrev.Low <= latestFVG.Top && cPrev.Low > latestFVG.Bottom && ck.Low <= latestFVG.Top && ck.Low < cPrev.Low && ck.Close >= latestFVG.Bottom && ck.Close >= cPrev.Low {
+		// - ck ditolak: close kembali di atas acuan
+		if latestFVG.Type == FVGBullish && ck.Low <= latestFVG.Top && ck.Low < acuan && ck.Close >= latestFVG.Bottom && ck.Close > acuan {
 			bsl := latestFVG.Top
 			for s := latestFVG.Candle2Index; s < k; s++ {
 				if candles[s].High > bsl {

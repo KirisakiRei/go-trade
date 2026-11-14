@@ -102,24 +102,42 @@ func TestHTFSweepAndCISD(t *testing.T) {
 	t.Logf("Setup summary: %s", setup.Summary)
 }
 
-func TestFakeSweepCandle3Rejected(t *testing.T) {
+// TestSweepLangsungSetelahCandle3Diterima menggantikan aturan lama
+// "TestFakeSweepCandle3Rejected".
+//
+// ATURAN LAMA (sudah tidak berlaku): candle yang langsung menyapu High Candle 3
+// DITOLAK, dengan alasan Candle 3 adalah pembentuk FVG sehingga bukan likuiditas
+// yang menunggu di dalam zona.
+//
+// ATURAN BARU (dokumen baku c2-closure-irl.md): level acuan awal sebuah bearish
+// FVG adalah high(Candle 3). Setiap candle yang menyapu acuan itu lalu ditutup
+// kembali di bawahnya adalah C2 Closure yang SAH. Dokumen tidak pernah
+// mensyaratkan adanya candle yang lebih dulu berada di dalam zona.
+//
+// Kasus nyata yang memaksa perubahan ini: XAUUSD H4 28 Aug 2026. Candle setelah
+// Candle 3 langsung menyapu acuan 4471.71 (high 4472.14, close 4440.30) tanpa
+// candle perantara karena pasar tutup Jumat. Trader menyatakan setup itu VALID.
+// Bentuk datanya identik dengan test ini, sehingga aturan lama tidak bisa
+// dipertahankan tanpa menolak setup yang sah.
+func TestSweepLangsungSetelahCandle3Diterima(t *testing.T) {
 	eval := NewEvaluator()
 	now := time.Now()
 
-	// Candle 4 baru pertama kali masuk ke FVG dan menembus High C3.
-	// Ini BUKAN sweep sah karena C3 adalah pembentuk FVG, bukan likuiditas yang sudah parkir di FVG.
 	htfCandles := []indicators.Candle{
 		{Timestamp: now.Add(-4 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
 		{Timestamp: now.Add(-3 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
-		{Timestamp: now.Add(-2 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212)
-		// C4: baru masuk FVG, menyapu C3 High (4220 > 4212). Harus DITOLAK!
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212) = acuan awal
+		// Candle berikutnya menyapu acuan 4212 (high 4220) dan ditolak (close 4180 < 4212).
 		{Timestamp: now.Add(-1 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true},
-		{Timestamp: now.Add(0), Open: 4180, High: 4215, Low: 4175, Close: 4190, IsClosed: false},
+		{Timestamp: now.Add(0), Open: 4180, High: 4215, Low: 4175, Close: 4190, IsClosed: true},
 	}
 
 	sweep := eval.DetectHTFIlaSweep(htfCandles)
-	if sweep != nil && sweep.Detected {
-		t.Fatalf("seharusnya sweep terhadap Candle 3 ditolak sebagai sweep palsu!")
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("sweep yang menyapu acuan high(C3) lalu ditolak harus DITERIMA sebagai C2, dapat %+v", sweep)
+	}
+	if sweep.Direction != "BEARISH" {
+		t.Fatalf("arah harus BEARISH, dapat %s", sweep.Direction)
 	}
 }
 
@@ -306,23 +324,28 @@ func TestDoubleFVGWithMitigatedNeighbourRejected(t *testing.T) {
 	}
 }
 
-// TestSingleFVGStillRejectsCandle3Sweep adalah penjaga regresi untuk perbaikan
-// Double FVG: FVG tunggal tanpa pasangan bersambung TETAP menolak sweep Candle 3.
-func TestSingleFVGStillRejectsCandle3Sweep(t *testing.T) {
+// TestSingleFVGSweepAcuanDiterima menggantikan penjaga regresi lama
+// "TestSingleFVGStillRejectsCandle3Sweep".
+//
+// FVG tunggal (tanpa pasangan Double FVG) TETAP boleh menghasilkan sweep, karena
+// yang diuji adalah level acuan high/low Candle 3, bukan status Double FVG.
+// Aturan Double FVG hanya relevan untuk memilih FVG mana yang dievaluasi lebih
+// dulu, bukan untuk menentukan sah/tidaknya sapuan.
+func TestSingleFVGSweepAcuanDiterima(t *testing.T) {
 	eval := NewEvaluator()
 	now := time.Now()
 
 	htfCandles := []indicators.Candle{
 		{Timestamp: now.Add(-4 * time.Hour), Open: 4250, High: 4260, Low: 4240, Close: 4245, IsClosed: true}, // C1
 		{Timestamp: now.Add(-3 * time.Hour), Open: 4245, High: 4245, Low: 4150, Close: 4155, IsClosed: true}, // C2
-		{Timestamp: now.Add(-2 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212)
-		{Timestamp: now.Add(-1 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true}, // menyapu C3 tanpa pasangan Double FVG
-		{Timestamp: now, Open: 4180, High: 4215, Low: 4175, Close: 4190, IsClosed: false},
+		{Timestamp: now.Add(-2 * time.Hour), Open: 4155, High: 4212, Low: 4150, Close: 4160, IsClosed: true}, // C3 (High=4212) = acuan
+		{Timestamp: now.Add(-1 * time.Hour), Open: 4160, High: 4220, Low: 4160, Close: 4180, IsClosed: true}, // sapu acuan, ditolak
+		{Timestamp: now, Open: 4180, High: 4215, Low: 4175, Close: 4190, IsClosed: true},
 	}
 
 	sweep := eval.DetectHTFIlaSweep(htfCandles)
-	if sweep != nil && sweep.Detected {
-		t.Fatalf("FAILED: FVG tunggal tetap harus menolak sweep terhadap Candle 3!")
+	if sweep == nil || !sweep.Detected {
+		t.Fatalf("FVG tunggal tetap sah menghasilkan sweep terhadap acuan Candle 3, dapat %+v", sweep)
 	}
 }
 
