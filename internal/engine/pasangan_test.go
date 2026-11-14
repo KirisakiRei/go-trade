@@ -11,6 +11,20 @@ import (
 // Runner HANYA menyaring pasangan yang sudah sah menurut aturan trading engine.
 // Runner tidak boleh bisa meminta pasangan karangan, dan engine yang belum
 // menerima daftar pasangan harus tetap berperilaku seperti sebelum fitur ini ada.
+//
+// CATATAN JAM PASAR: Publisher.Scan berhenti lebih awal bila pasar tutup
+// (market.StateOf != Open). Semua pengujian di file ini menguji PENYARINGAN
+// pasangan timeframe, bukan jam pasar. Karena itu jamnya WAJIB dipatok ke hari
+// kerja, kalau tidak hasilnya berubah-ubah mengikuti hari test dijalankan
+// (gagal tiap Sabtu-Minggu). Gunakan jamPasarBuka() bersama WithClock.
+
+// jamPasarBuka mengembalikan clock tetap pada Senin 10:00 UTC, saat pasar buka.
+// Dipakai agar pengujian tidak bergantung pada waktu nyata.
+func jamPasarBuka() func() time.Time {
+	return func() time.Time {
+		return time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC) // Senin, pasar buka
+	}
+}
 
 // evaluatorEmpatPasangan meniru ILA 2.0: empat pasangan tetap.
 func evaluatorEmpatPasangan() *fakeEvaluator {
@@ -37,7 +51,7 @@ func TestPasanganKosongMenghitungSemua(t *testing.T) {
 	reg := NewRegistry()
 	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
 
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 	dipanggil := &[]string{}
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
 
@@ -57,7 +71,7 @@ func TestPasanganDimintaMenyaringTanpaMenambah(t *testing.T) {
 	})
 
 	dipanggil := &[]string{}
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
 
 	pub.Scan(context.Background())
@@ -79,7 +93,7 @@ func TestPasanganDiLuarAturanTidakDitambahkan(t *testing.T) {
 	})
 
 	dipanggil := &[]string{}
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
 
 	pub.Scan(context.Background())
@@ -101,7 +115,7 @@ func TestGabunganPasanganBeberapaPelanggan(t *testing.T) {
 	})
 
 	dipanggil := &[]string{}
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
 
 	pub.Scan(context.Background())
@@ -123,7 +137,7 @@ func TestSatuPelangganMemintaSemuaMembatalkanPenyaringan(t *testing.T) {
 	})
 
 	dipanggil := &[]string{}
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
 
 	pub.Scan(context.Background())
@@ -425,7 +439,7 @@ func TestPairsForRestrictedKosongTidakEvaluasi(t *testing.T) {
 			"XAUUSD": {Pairs: nil, Restricted: true},
 		},
 	})
-	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards())
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
 
 	dipanggil := &[]string{}
 	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
