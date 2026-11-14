@@ -91,15 +91,16 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 		// Bearish FVG: Low(C1) > High(C3) (C2 is a massive downward expansion candle)
 		if c1.Low > c3.High && c2.Close < c2.Open {
 			fvg := FVG{
-				Type:         FVGBearish,
-				Top:          c1.Low,
-				Bottom:       c3.High,
-				Candle1Index: i - 2,
-				Candle2Index: i - 1,
-				Candle3Index: i,
-				Candle1Time:  c1.Timestamp,
-				Candle2Time:  c2.Timestamp,
-				Candle3Time:  c3.Timestamp,
+				Type:             FVGBearish,
+				Top:              c1.Low,
+				Bottom:           c3.High,
+				Candle1Index:     i - 2,
+				Candle2Index:     i - 1,
+				Candle3Index:     i,
+				Candle1Time:      c1.Timestamp,
+				Candle2Time:      c2.Timestamp,
+				Candle3Time:      c3.Timestamp,
+				InvalidatedIndex: -1,
 			}
 
 			// Check if subsequently mitigated by candles k > i
@@ -113,21 +114,39 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 					break
 				}
 			}
+
+			// INVALIDASI versi dokumen baku ILA 2.0: HANYA close yang menembus batas
+			// atas zona. Berbeda dari Mitigated di atas yang memakai wick + toleransi.
+			// Keduanya sengaja dipisah: Mitigated menyaring kandidat sweep (perilaku
+			// live), Invalidated menutup FVG untuk evaluasi C2 Closure.
+			for k := i + 1; k < n; k++ {
+				if !candles[k].IsClosed {
+					break
+				}
+				if candles[k].Close > fvg.Top {
+					fvg.Invalidated = true
+					fvg.InvalidatedIndex = k
+					fvg.InvalidatedTime = candles[k].Timestamp
+					break
+				}
+			}
+
 			fvgs = append(fvgs, fvg)
 		}
 
 		// Bullish FVG: High(C1) < Low(C3) (C2 is a massive upward expansion candle)
 		if c1.High < c3.Low && c2.Close > c2.Open {
 			fvg := FVG{
-				Type:         FVGBullish,
-				Top:          c3.Low,
-				Bottom:       c1.High,
-				Candle1Index: i - 2,
-				Candle2Index: i - 1,
-				Candle3Index: i,
-				Candle1Time:  c1.Timestamp,
-				Candle2Time:  c2.Timestamp,
-				Candle3Time:  c3.Timestamp,
+				Type:             FVGBullish,
+				Top:              c3.Low,
+				Bottom:           c1.High,
+				Candle1Index:     i - 2,
+				Candle2Index:     i - 1,
+				Candle3Index:     i,
+				Candle1Time:      c1.Timestamp,
+				Candle2Time:      c2.Timestamp,
+				Candle3Time:      c3.Timestamp,
+				InvalidatedIndex: -1,
 			}
 
 			// Check if subsequently mitigated by candles k > i
@@ -139,6 +158,21 @@ func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 					break
 				}
 			}
+
+			// INVALIDASI versi dokumen baku ILA 2.0: HANYA close yang menembus batas
+			// bawah zona (cermin dari sisi bearish).
+			for k := i + 1; k < n; k++ {
+				if !candles[k].IsClosed {
+					break
+				}
+				if candles[k].Close < fvg.Bottom {
+					fvg.Invalidated = true
+					fvg.InvalidatedIndex = k
+					fvg.InvalidatedTime = candles[k].Timestamp
+					break
+				}
+			}
+
 			fvgs = append(fvgs, fvg)
 		}
 	}

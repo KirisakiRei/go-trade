@@ -24,7 +24,30 @@ type FVG struct {
 	Candle1Time  time.Time `json:"candle1_time"`
 	Candle2Time  time.Time `json:"candle2_time"`
 	Candle3Time  time.Time `json:"candle3_time"`
-	Mitigated    bool      `json:"mitigated"`
+
+	// Mitigated menandakan ekor (wick) harga sudah menyentuh batas terjauh FVG.
+	// Ini aturan LAMA yang dipakai menyaring kandidat sweep 2-FVG. JANGAN diubah,
+	// karena perilaku entry live bergantung padanya.
+	//
+	// Mitigated BUKAN sinonim Invalidated. FVG bisa Mitigated=true (ekor sudah
+	// menyentuh atap/dasar zona) namun Invalidated=false (belum ada close yang
+	// menembus batas zona). Justru kondisi itu yang membuat FVG masih layak
+	// menghasilkan C2 Closure menurut dokumen baku ILA 2.0.
+	Mitigated bool `json:"mitigated"`
+
+	// Invalidated adalah aturan INVALIDASI versi dokumen baku ILA 2.0:
+	// FVG mati HANYA bila ada CLOSE yang menembus batas terjauh zona.
+	//   - Bearish / SIBI: close > Top
+	//   - Bullish / BISI: close < Bottom
+	// Wick boleh menembus batas zona tanpa membatalkan FVG.
+	Invalidated bool `json:"invalidated"`
+
+	// InvalidatedIndex adalah indeks candle pertama yang close-nya menembus batas
+	// zona. Bernilai -1 bila FVG belum invalid.
+	InvalidatedIndex int `json:"invalidated_index"`
+
+	// InvalidatedTime adalah waktu candle yang membuat FVG invalid.
+	InvalidatedTime time.Time `json:"invalidated_time"`
 }
 
 // HTFSweep represents an Imaginary Liquidity Sweep occurring inside an HTF FVG.
@@ -46,7 +69,7 @@ type HTFSweep struct {
 // CISD represents Change In State of Delivery on LTF (body breaks body).
 type CISD struct {
 	Detected    bool              `json:"detected"`
-	Direction   string            `json:"direction"` // BEARISH or BULLISH
+	Direction   string            `json:"direction"`    // BEARISH or BULLISH
 	RefCandle   indicators.Candle `json:"ref_candle"`   // The opposing candle being broken
 	BreakCandle indicators.Candle `json:"break_candle"` // The candle that broke ref candle by body
 	BreakTime   time.Time         `json:"break_time"`
