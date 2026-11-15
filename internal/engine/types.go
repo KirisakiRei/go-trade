@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"ila-engine/internal/signal"
+	"ila-engine/pkg/ila"
 )
 
 // Signal adalah bentuk sinyal yang dikirim engine ke Runner.
@@ -26,6 +27,9 @@ type Signal struct {
 	Summary     string
 	NextAction  string
 
+	HTFSweep *ila.HTFSweep
+	CISD     *ila.CISD
+
 	PublishedAt time.Time
 	ExpiresAt   time.Time
 
@@ -36,6 +40,11 @@ type Signal struct {
 	FinalZoneTP    float64
 	QuarterInfo    string
 	SSMTResult     string
+
+	// FeedSource adalah sumber candle yang dipakai evaluasi, mis. "FOREXCOM".
+	// Ikut dikirim ke Runner agar dashboard menampilkan chart dari feed yang
+	// sama dengan yang dibaca engine.
+	FeedSource string
 
 	SupersededBy string
 	Reason       string
@@ -80,6 +89,9 @@ type Result struct {
 	PassedMinRR bool
 	Summary     string
 	NextAction  string
+
+	HTFSweep *ila.HTFSweep
+	CISD     *ila.CISD
 
 	SetupType      string
 	SequenceState  string

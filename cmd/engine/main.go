@@ -39,13 +39,12 @@ func main() {
 		addr     = flag.String("addr", env("ENGINE_GRPC_ADDR", ":9090"), "alamat dengar gRPC")
 		strategy = flag.String("strategy", env("ENGINE_STRATEGY", "ila-2.0"), "strategi: ila-2.0 | ila-3.0")
 		symbols  = flag.String("symbols", env("ENGINE_SYMBOLS", ""), "simbol awal, pisahkan koma; kosong berarti menunggu langganan Runner")
-		interval = flag.Duration("interval", envDuration("ENGINE_EVAL_INTERVAL", time.Minute), "jeda antar evaluasi")
+		interval = flag.Duration("interval", envDuration("ENGINE_EVAL_INTERVAL", 5*time.Second), "jeda antar evaluasi")
 		certFile = flag.String("tls-cert", env("ENGINE_MTLS_CERT", ""), "sertifikat server (kosong = tanpa TLS)")
 		keyFile  = flag.String("tls-key", env("ENGINE_MTLS_KEY", ""), "kunci server")
 		caFile   = flag.String("tls-ca", env("ENGINE_MTLS_CA", ""), "CA klien untuk mTLS")
 		version  = flag.String("version", env("ENGINE_VERSION", "dev"), "versi engine untuk log & sinyal")
 		verbose  = flag.Bool("v", false, "log debug")
-		demo     = flag.Bool("demo", false, "evaluator tiruan untuk uji alur sinyal tanpa data pasar")
 		logDir   = flag.String("log-dir", env("ENGINE_LOG_DIR", "/opt/data/ila-engine/logs"), "folder log harian; kosong = hanya stdout")
 		logHari  = flag.Int("log-hari", envInt("ENGINE_LOG_HARI", 7), "hari penyimpanan log sebelum dihapus")
 		logBatas = flag.Int64("log-batas-mb", envInt64("ENGINE_LOG_BATAS_MB", 150), "batas total ukuran log dalam MB")
@@ -57,9 +56,12 @@ func main() {
 	flag.Parse()
 
 	// Pengirim disiapkan lebih dulu karena logger membutuhkan hook salinannya.
+	// Nama layanan menjadi nama berkas log, jadi engine kedua (ILA 3.0) wajib
+	// memakai nama berbeda agar tidak menulis ke berkas yang sama.
+	layanan := env("ENGINE_LOG_LAYANAN", "engine")
 	pengirim := logsync.Baru(logsync.Opsi{
 		Addr:     *logKirim,
-		Layanan:  "engine",
+		Layanan:  layanan,
 		CertFile: *logCert,
 		KeyFile:  *logKey,
 		CAFile:   *logCA,
@@ -67,7 +69,7 @@ func main() {
 
 	hasilLog := logkit.Buat(logkit.Opsi{
 		Dir:        *logDir,
-		Layanan:    "engine",
+		Layanan:    layanan,
 		Level:      pilihLevel(*verbose),
 		JugaStdout: true,
 		HariSimpan: *logHari,
@@ -82,42 +84,27 @@ func main() {
 
 	reg := engine.NewRegistry()
 
-	var evaluator engine.Evaluator
-	if *demo {
-		// Evaluator tiruan: menguji alur engine -> Runner tanpa data pasar.
-		pairs := engine.ILA2Pairs
-		hasil := map[string]*engine.Result{"H4|M15": engine.DemoResult()}
-		if *strategy == "ila-3.0" {
-			pairs = []engine.Pair{{HTF: "4H", LTF: "5m"}, {HTF: "D", LTF: "15m"}}
-			hasil = map[string]*engine.Result{
-				"4H|5m": engine.DemoResult(),
-				"D|15m": engine.DemoResult(),
-			}
-		}
-		evaluator = engine.NewUjiEvaluator(*strategy, pairs, hasil)
-		logger.Warn("mode demo: sinyal berasal dari evaluator tiruan")
-	}
+	// Satu penyedia data dipakai bersama oleh evaluator dan publisher: evaluator
+	// menarik lilin, publisher menyelaraskan feed pilihan admin per simbol.
+	feed := marketfeed.NewMultiFeedProvider()
 
-	switch {
-	case evaluator != nil:
-		// mode demo sudah menentukan evaluator
-	case *strategy == "ila-3.0":
-		feed := marketfeed.NewMultiFeedProvider()
+	var evaluator engine.Evaluator
+	switch *strategy {
+	case "ila-3.0":
 		evaluator = engine.NewILA3Evaluator(feed)
 	default:
 		if *strategy != "ila-2.0" {
 			logger.Warn("strategi tidak dikenal, memakai ila-2.0", "diminta", *strategy)
 		}
-		feed := marketfeed.NewMultiFeedProvider()
 		evaluator = engine.NewILA2Evaluator(service.NewILA2Service(feed))
 	}
 
 	ver := engine.Version{Engine: *version, Strategy: evaluator.StrategyVersion()}
-	pub := engine.NewPublisher(evaluator, reg, ver, logger)
-	if *demo {
-		// Mode demo sengaja melewati jam pasar agar alur bisa diuji kapan saja.
-		pub = pub.AbaikanJamPasar()
-	}
+	// Evaluasi hanya dijadwalkan pada penutupan lilin: setup yang sama tidak
+	// boleh diterbitkan ulang setiap siklus scan.
+	pub := engine.NewPublisher(evaluator, reg, ver, logger).
+		DenganJadwalLilin(3 * time.Second).
+		DenganFeedRouter(feed)
 
 	// Simbol dari konfigurasi dijadikan pelanggan tetap agar engine bisa
 	// dipakai tanpa Runner selama pengujian.
@@ -158,6 +145,15 @@ func main() {
 			MaxConnectionIdle: 10 * time.Minute,
 			Time:              2 * time.Minute,
 			Timeout:           20 * time.Second,
+		}),
+		// Runner mengirim ping tiap 30 detik agar tahu secepat mungkin bila
+		// engine mati. Kebijakan bawaan gRPC hanya mengizinkan satu ping per
+		// 5 menit dan membalas ENHANCE_YOUR_CALM "too_many_pings", sehingga
+		// stream terputus lalu tersambung berulang tanpa alasan yang jelas.
+		// Batas di sini diterima sedikit lebih longgar daripada ping Runner.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
 		}),
 	}
 	if *certFile != "" && *keyFile != "" {

@@ -132,6 +132,11 @@ message Signal {
   double critical_zone_tp = 24; // target StDev -2.0 s.d. -2.5
   string quarter_info   = 25;  // ringkasan Quarterly Theory
   string ssmt_result    = 26;  // ringkasan SMT
+
+  // feed_source adalah sumber candle yang dipakai evaluasi ini, mis.
+  // "FOREXCOM" atau "ICMARKETS". Dashboard memakai nilai ini agar chart yang
+  // ditampilkan berasal dari feed yang sama dengan yang dibaca engine.
+  string feed_source = 27;
 }
 
 message SignalUpdate {
@@ -188,11 +193,29 @@ message SubscribeRequest {
   repeated string symbols = 2;
   repeated Pair pairs = 3;
   bool want_status_updates = 4;
+  // symbol_feeds memetakan simbol kanonik ke sumber candle yang dipilih admin,
+  // mis. {"XAUUSD": "FOREXCOM", "NAS100": "ICMARKETS"}. Simbol tanpa entri
+  // memakai pemetaan bawaan engine.
+  map<string, string> symbol_feeds = 5;
+  // symbol_pairs memetakan simbol kanonik ke daftar pair yang memang diminta
+  // untuk simbol itu saja. Runner mengirim ini agar switch watch per simbol
+  // tidak bocor ke simbol lain. Field `pairs` (no. 3) tetap dikirim sebagai
+  // jalur kompatibilitas untuk engine lama.
+  map<string, SymbolPairs> symbol_pairs = 6;
 }
 
 message Pair {
   string htf = 1;
   string ltf = 2;
+}
+
+// SymbolPairs adalah kebijakan pair untuk satu simbol.
+// restricted = false berarti simbol ini belum pernah diatur, engine memakai
+// seluruh pair bawaan. restricted = true berarti daftar di `pairs` bersifat
+// final: bila kosong, simbol ini tidak dievaluasi sama sekali.
+message SymbolPairs {
+  repeated Pair pairs   = 1;
+  bool          restricted = 2;
 }
 
 message UnsubscribeRequest {

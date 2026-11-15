@@ -71,6 +71,8 @@ func (p *TradingViewProvider) MapSymbol(symbol string) string {
 		return "FOREXCOM:NZDUSD"
 	case "NAS100", "US100", "USTEC", "NDX":
 		return "FOREXCOM:NAS100"
+	case "US500", "SPX500", "SPX":
+		return "FOREXCOM:SPX500"
 	case "BTCUSD", "BTCUSDT":
 		return "BINANCE:BTCUSDT"
 	case "ETHUSD", "ETHUSDT":
@@ -79,6 +81,60 @@ func (p *TradingViewProvider) MapSymbol(symbol string) string {
 		// Default to FOREXCOM prefix for currency/metal pairs
 		return "FOREXCOM:" + symClean
 	}
+}
+
+// feedAliases menerjemahkan simbol katalog ke nama yang dipakai feed tersebut.
+//
+// Pemetaan ini WAJIB sama dengan yang dipakai backend platform
+// (internal/market di go-ila-platform). Contoh: katalog memakai USTEC dan
+// US500, sedangkan FOREX.com di TradingView menamainya NAS100 dan SPX500 —
+// sementara IC Markets memakai USTEC dan US500, tapi menyebut GER40 sebagai
+// DE40 dan USOIL sebagai XTIUSD.
+//
+// Semua pasangan di bawah sudah diuji langsung ke feed TradingView, bukan
+// tebakan.
+var feedAliases = map[string]map[string]string{
+	"FOREXCOM": {
+		"USTEC": "NAS100",
+		"US100": "NAS100",
+		"NDX":   "NAS100",
+		"US500": "SPX500",
+		"SPX":   "SPX500",
+	},
+	"ICMARKETS": {
+		"GER40": "DE40",
+		"USOIL": "XTIUSD",
+		"WTI":   "XTIUSD",
+	},
+}
+
+// MapSymbolWithFeed memetakan simbol ke "<FEED>:<SIMBOL>" sesuai pilihan admin.
+//
+// Feed kosong berarti pemetaan bawaan (FOREXCOM untuk forex/logam/indeks,
+// BINANCE untuk kripto) dipertahankan agar perilaku lama tidak berubah.
+func (p *TradingViewProvider) MapSymbolWithFeed(symbol, feed string) string {
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+	if strings.Contains(sym, ":") {
+		return sym
+	}
+
+	f := strings.ToUpper(strings.TrimSpace(feed))
+	if f == "" {
+		return p.MapSymbol(sym)
+	}
+
+	symClean := strings.ReplaceAll(sym, "/", "")
+
+	// Binance memakai pasangan USDT, sedangkan katalog ILA memakai akhiran USD.
+	if f == "BINANCE" && strings.HasSuffix(symClean, "USD") && !strings.HasSuffix(symClean, "USDT") {
+		symClean += "T"
+	}
+
+	if alias, ok := feedAliases[f][symClean]; ok {
+		symClean = alias
+	}
+
+	return f + ":" + symClean
 }
 
 func (p *TradingViewProvider) MapResolution(timeframe string) string {
@@ -105,7 +161,9 @@ func (p *TradingViewProvider) MapResolution(timeframe string) string {
 	case "1W", "W1", "W":
 		return "1W"
 	default:
-		return "15"
+		// Timeframe tak dikenal tidak boleh diam-diam memakai 15 menit:
+		// candle dengan resolusi berbeda membuat evaluasi salah tanpa jejak.
+		return ""
 	}
 }
 
@@ -152,8 +210,20 @@ func formatTVMsg(funcName string, params []any) string {
 }
 
 func (p *TradingViewProvider) FetchCandles(ctx context.Context, symbol string, timeframe string, limit int) ([]indicators.Candle, error) {
-	tvSymbol := p.MapSymbol(symbol)
+	return p.FetchCandlesWithFeed(ctx, symbol, "", timeframe, limit)
+}
+
+// FetchCandlesWithFeed mengambil candle dari feed broker tertentu, mis.
+// "ICMARKETS" atau "FOREXCOM". Feed kosong memakai pemetaan bawaan.
+func (p *TradingViewProvider) FetchCandlesWithFeed(ctx context.Context, symbol, feed, timeframe string, limit int) ([]indicators.Candle, error) {
+	return p.fetch(ctx, p.MapSymbolWithFeed(symbol, feed), timeframe, limit)
+}
+
+func (p *TradingViewProvider) fetch(ctx context.Context, tvSymbol, timeframe string, limit int) ([]indicators.Candle, error) {
 	resolution := p.MapResolution(timeframe)
+	if resolution == "" {
+		return nil, fmt.Errorf("timeframe TradingView tidak dikenal: %q", timeframe)
+	}
 
 	if limit <= 0 {
 		limit = 100

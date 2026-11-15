@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"ila-engine/internal/market"
 	"ila-engine/internal/signal"
+	"ila-engine/pkg/ila"
 )
 
 // Publisher menerbitkan sinyal untuk satu strategi.
@@ -29,18 +31,44 @@ type Publisher struct {
 	// gagalPada mencatat kapan slot terakhir gagal, untuk membatasi log.
 	gagalPada map[string]time.Time
 
-	// abaikanJamPasar hanya untuk pengujian: memaksa engine mengevaluasi
-	// walau pasar tutup. Tidak pernah aktif di produksi.
-	abaikanJamPasar bool
+	pakaiJadwalLilin bool
+	bufferLilin      time.Duration
+
+	// evaluasiTerakhir mencatat kapan tabel evaluasi terakhir dicatat, supaya
+	// log denyut tetap ringkas (satu baris per menit) walau scan jalan tiap
+	// beberapa detik. Tanpa denyut, engine yang diam tidak bisa dibedakan
+	// antara "tidak ada setup" dan "tidak dievaluasi sama sekali".
+	evaluasiTerakhir time.Time
+	evaluasiMenit    int
+
+	// dimatikanSemua mencatat simbol yang seluruh pasangannya dimatikan agar
+	// peringatan hanya muncul sekali, bukan tiap menit.
+	dimatikanSemua map[string]struct{}
+
+	// feed memilih sumber candle per simbol. Nil berarti engine memakai
+	// pemetaan bawaan penyedia data (perilaku lama).
+	feed FeedRouter
+}
+
+// FeedRouter menetapkan dan melaporkan feed candle per simbol.
+//
+// Dipenuhi marketfeed.MultiFeedProvider. Antarmuka kecil ini menjaga package
+// engine tetap tidak bergantung pada detail penyedia data.
+type FeedRouter interface {
+	SetSymbolFeed(symbol, feed string)
+	FeedFor(symbol string) string
 }
 
 // slotState mencatat slot sinyal beserta identitas simbolnya, supaya sinyal
 // kedaluwarsa bisa dikirim lengkap ke Runner.
 type slotState struct {
-	slot signal.Slot
-	sym  string
-	htf  string
-	ltf  string
+	slot            signal.Slot
+	sym             string
+	htf             string
+	ltf             string
+	feed            string
+	lastStatus      signal.Status
+	lastEvaluatedAt time.Time
 }
 
 // NewPublisher merangkai evaluator dengan registry pelanggan.
@@ -56,11 +84,30 @@ func NewPublisher(eval Evaluator, reg *Registry, version Version, log *slog.Logg
 	}
 }
 
-// AbaikanJamPasar mematikan pemeriksaan jam pasar. Hanya untuk pengujian
-// alur sinyal di luar jam pasar; tidak boleh dipakai di produksi.
-func (p *Publisher) AbaikanJamPasar() *Publisher {
-	p.abaikanJamPasar = true
+// DenganJadwalLilin menyalakan evaluasi berbasis penutupan lilin.
+func (p *Publisher) DenganJadwalLilin(buffer time.Duration) *Publisher {
+	p.pakaiJadwalLilin = true
+	p.bufferLilin = buffer
 	return p
+}
+
+// DenganFeedRouter menyuntikkan pemilih feed candle per simbol.
+func (p *Publisher) DenganFeedRouter(fr FeedRouter) *Publisher {
+	p.feed = fr
+	return p
+}
+
+// terapkanFeed menyelaraskan feed penyedia data dengan permintaan Runner lalu
+// mengembalikan feed efektif untuk simbol tersebut.
+//
+// Nilai kosong ikut diterapkan: bila admin mengosongkan feed sebuah pair, engine
+// harus kembali ke pemetaan bawaannya, bukan memakai pilihan lama selamanya.
+func (p *Publisher) terapkanFeed(symbol string) string {
+	if p.feed == nil {
+		return ""
+	}
+	p.feed.SetSymbolFeed(symbol, p.reg.WantedFeed(symbol))
+	return p.feed.FeedFor(symbol)
 }
 
 // WithClock memakai jam buatan pada pengujian.
@@ -80,7 +127,7 @@ func (p *Publisher) Scan(ctx context.Context) {
 		return
 	}
 
-	if !p.abaikanJamPasar && market.StateOf(now.Weekday(), now.Hour()) != market.Open {
+	if market.StateOf(now.Weekday(), now.Hour()) != market.Open {
 		// Pasar tutup: tidak ada evaluasi baru. Sinyal yang sudah terbit
 		// dibiarkan sampai TTL-nya habis.
 		p.expireAll(now)
@@ -88,16 +135,134 @@ func (p *Publisher) Scan(ctx context.Context) {
 	}
 
 	for _, symbol := range symbols {
-		for _, pair := range p.eval.Pairs() {
-			p.evaluateSlot(ctx, symbol, pair, now)
+		for _, pair := range p.pairsFor(symbol) {
+			key := signal.Key(symbol, pair.HTF, pair.LTF)
+			p.mu.Lock()
+			st := p.slots[key]
+			due := p.slotDue(st, pair, now)
+			p.mu.Unlock()
+
+			if due {
+				p.evaluateSlot(ctx, symbol, pair, now)
+			}
 		}
 	}
 
+	p.catatDenyut(now, symbols)
 	p.expireAll(now)
+}
+
+// catatDenyut menulis satu baris ringkasan per menit: simbol yang dipantau,
+// pasangan timeframe yang benar-benar dievaluasi, dan jumlah slot jatuh tempo.
+//
+// Ini satu-satunya cara membedakan "radar tidak ada setup" dari "radar tidak
+// dievaluasi". Isinya sengaja ringkas agar tidak menenggelamkan log sinyal.
+func (p *Publisher) catatDenyut(now time.Time, symbols []string) {
+	menit := int(now.Unix() / 60)
+	p.mu.Lock()
+	if p.evaluasiMenit == menit {
+		p.mu.Unlock()
+		return
+	}
+	p.evaluasiMenit = menit
+	p.mu.Unlock()
+
+	total := 0
+	rinci := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		pairs := p.pairsFor(symbol)
+		total += len(pairs)
+		label := fmt.Sprintf("%s:%d", symbol, len(pairs))
+		if len(pairs) == 0 {
+			// Nol pasangan berarti tidak ada slot yang akan dihitung: bisa
+			// karena seluruh switch dimatikan, atau karena permintaan
+			// pelanggan semuanya di luar aturan evaluator.
+			label += "(mati)"
+		}
+		rinci = append(rinci, label)
+	}
+
+	p.log.Info("radar dievaluasi",
+		"symbols", len(symbols), "slots", total, "rinci", strings.Join(rinci, " "))
+}
+
+// pairsFor menentukan pasangan timeframe yang dihitung untuk satu simbol.
+//
+// Aturan trading tetap pakai: pasangan yang boleh dievaluasi hanya yang ada di
+// daftar evaluator. Permintaan pelanggan HANYA menyaring, tidak pernah
+// menambah. Runner yang meminta pasangan di luar aturan ILA tidak akan membuat
+// engine mengarang setup yang tidak sah.
+func (p *Publisher) pairsFor(symbol string) []Pair {
+	semua := p.eval.Pairs()
+	diminta, dibatasi := p.reg.WantedPairs(symbol)
+	if !dibatasi {
+		return semua
+	}
+
+	sah := make(map[Pair]struct{}, len(semua))
+	normSah := make(map[string]Pair, len(semua))
+	for _, pair := range semua {
+		sah[pair] = struct{}{}
+		normSah[normTF(pair.HTF)+"|"+normTF(pair.LTF)] = pair
+	}
+
+	out := make([]Pair, 0, len(diminta))
+	seen := make(map[Pair]struct{}, len(diminta))
+	for _, pair := range diminta {
+		if _, ok := sah[pair]; ok {
+			if _, dup := seen[pair]; !dup {
+				seen[pair] = struct{}{}
+				out = append(out, pair)
+			}
+			continue
+		}
+		key := normTF(pair.HTF) + "|" + normTF(pair.LTF)
+		if canon, ok := normSah[key]; ok {
+			if _, dup := seen[canon]; !dup {
+				seen[canon] = struct{}{}
+				out = append(out, canon)
+			}
+		}
+	}
+	if len(out) == 0 {
+		// Semua permintaan di luar aturan: jangan mengevaluasi apa pun,
+		// tetapi juga jangan diam-diam kembali ke empat pasangan — itu
+		// membuat pemfilteran tampak tidak berfungsi.
+		//
+		// Kasus ini juga menangkap simbol yang seluruh switch-nya dimatikan
+		// (Opsi A): simbol tidak dievaluasi, dan dicatat sekali agar
+		// operator tahu ini disengaja, bukan bug.
+		p.catatDimatikanSemua(symbol)
+		return nil
+	}
+	return out
+}
+
+// catatDimatikanSemua menulis satu peringatan saat seluruh pasangan satu
+// simbol dimatikan, bukan satu baris tiap evaluasi.
+func (p *Publisher) catatDimatikanSemua(symbol string) {
+	p.mu.Lock()
+	if p.dimatikanSemua == nil {
+		p.dimatikanSemua = make(map[string]struct{})
+	}
+	_, sudah := p.dimatikanSemua[symbol]
+	p.dimatikanSemua[symbol] = struct{}{}
+	p.mu.Unlock()
+
+	if sudah {
+		return
+	}
+	p.log.Warn("seluruh pasangan simbol dimatikan",
+		"evt", "pairs.semua.mati", "symbol", symbol,
+		"akibat", "simbol tidak dievaluasi sampai switch dinyalakan lagi")
 }
 
 // evaluateSlot mengevaluasi satu slot lalu menerbitkan hasilnya.
 func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, now time.Time) {
+	// Feed diselaraskan lebih dulu: evaluator harus membaca lilin dari broker
+	// yang dipilih admin, bukan dari pemetaan bawaan.
+	feed := p.terapkanFeed(symbol)
+
 	res, err := p.eval.Evaluate(symbol, pair.HTF, pair.LTF)
 	if err != nil {
 		// Gagal mengambil data bukan sinyal. Dicatat paling sering sekali per
@@ -116,9 +281,13 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 	p.mu.Lock()
 	st := p.slots[key]
 	if st == nil {
-		st = &slotState{sym: symbol, htf: pair.HTF, ltf: pair.LTF}
+		st = &slotState{sym: symbol, htf: pair.HTF, ltf: pair.LTF, feed: feed}
 		p.slots[key] = st
+	} else if feed != "" {
+		st.feed = feed
 	}
+	st.lastEvaluatedAt = now
+	st.lastStatus = status
 
 	// Struktur batal: tarik sinyal yang sudah terbit.
 	if status == signal.Invalidated {
@@ -140,7 +309,7 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 			return
 		}
 		p.mu.Unlock()
-		p.broadcastStatus(symbol, pair, status, now)
+		p.broadcastStatus(symbol, pair, status, now, res, feed)
 		return
 	}
 
@@ -184,7 +353,7 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 	if previous != "" {
 		p.broadcast(superseded(previous, st, now))
 	}
-	p.broadcast(p.toOut(sig, action, res))
+	p.broadcast(p.toOut(sig, action, res, feed))
 }
 
 // expireAll menarik sinyal yang lewat masa berlaku.
@@ -231,7 +400,11 @@ func (p *Publisher) Snapshot(symbols []string) []Signal {
 				continue
 			}
 		}
-		out = append(out, p.toOut(*active, signal.ActionPublish, nil))
+		feed := st.feed
+		if feed == "" {
+			feed = p.terapkanFeed(active.Symbol)
+		}
+		out = append(out, p.toOut(*active, signal.ActionPublish, nil, feed))
 	}
 	return out
 }
@@ -268,22 +441,111 @@ func (p *Publisher) logGagal(symbol string, pair Pair, err error) {
 		"symbol", symbol, "htf", pair.HTF, "ltf", pair.LTF, "error", err.Error())
 }
 
-// broadcastStatus mengirim status menunggu. Tidak pernah membawa harga dan
-// tidak boleh dieksekusi Runner.
-//
-// ID status sengaja stabil per slot, bukan unik tiap scan: Runner menyimpan
-// setiap sinyal yang diterimanya, jadi ID baru tiap menit akan membuat tabel
-// sinyal membengkak tanpa batas.
-func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time) {
+// broadcastStatus mengirim status menunggu dengan data struktur pendukung.
+func (p *Publisher) broadcastStatus(symbol string, pair Pair, status signal.Status, now time.Time, res *Result, feed string) {
+	dir := "NEUTRAL"
+	var summary, nextAction, sequenceState string
+	var htfSweep *ila.HTFSweep
+	var cisd *ila.CISD
+
+	if res != nil {
+		if res.Direction != "" {
+			dir = res.Direction
+		}
+		summary = res.Summary
+		nextAction = res.NextAction
+		htfSweep = res.HTFSweep
+		cisd = res.CISD
+		sequenceState = res.SequenceState
+	}
+
 	p.reg.Broadcast(Signal{
-		ID:          statusID(symbol, pair),
-		Symbol:      symbol,
-		HTF:         pair.HTF,
-		LTF:         pair.LTF,
-		Status:      status,
-		Action:      signal.ActionPublish,
-		PublishedAt: now,
+		ID:            statusID(symbol, pair),
+		Symbol:        symbol,
+		HTF:           pair.HTF,
+		LTF:           pair.LTF,
+		Status:        status,
+		Action:        signal.ActionPublish,
+		Direction:     dir,
+		Summary:       summary,
+		NextAction:    nextAction,
+		HTFSweep:      htfSweep,
+		CISD:          cisd,
+		SequenceState: sequenceState,
+		FeedSource:    feed,
+		PublishedAt:   now,
+		ExpiresAt:     now.Add(signal.TTLUntuk(pair.LTF)),
 	})
+}
+
+func (p *Publisher) slotDue(st *slotState, pair Pair, now time.Time) bool {
+	if !p.pakaiJadwalLilin {
+		return true
+	}
+	if st == nil || st.lastEvaluatedAt.IsZero() {
+		return true
+	}
+
+	tf := pair.HTF
+	if menungguLTF(st.lastStatus) {
+		tf = pair.LTF
+	}
+
+	return isCandleClosedSince(tf, st.lastEvaluatedAt, now, p.bufferLilin)
+}
+
+func isCandleClosedSince(tf string, lastEval, now time.Time, buffer time.Duration) bool {
+	tClose := latestCandleClose(tf, now.Add(-buffer))
+	if tClose.IsZero() {
+		return true
+	}
+	tReady := tClose.Add(buffer)
+	if now.Before(tReady) {
+		return false
+	}
+	return lastEval.Before(tReady)
+}
+
+var nyLocation *time.Location
+
+func init() {
+	var err error
+	nyLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLocation = time.FixedZone("EST", -5*3600)
+	}
+}
+
+func latestCandleClose(tf string, t time.Time) time.Time {
+	t = t.UTC()
+	switch tf {
+	case "M5", "5m":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/5)*5, 0, 0, time.UTC)
+	case "M15", "15m":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/15)*15, 0, 0, time.UTC)
+	case "H1", "1H", "1h":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
+	case "H4", "4H", "4h":
+		tInNY := t.In(nyLocation)
+		nyHour := tInNY.Hour()
+		closeHour := nyHour - ((nyHour - 1 + 24) % 4)
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), closeHour, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
+	case "D", "D1", "1D", "1d":
+		tInNY := t.In(nyLocation)
+		closeDay := tInNY.Day()
+		if tInNY.Hour() < 17 {
+			tInNY = tInNY.AddDate(0, 0, -1)
+			closeDay = tInNY.Day()
+		}
+		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), closeDay, 17, 0, 0, 0, nyLocation)
+		return tCloseNY.UTC()
+	case "W", "W1", "1W", "1w":
+		days := (int(t.Weekday()) + 6) % 7
+		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Time{}
+	}
 }
 
 // statusID membentuk identitas tetap untuk status menunggu satu slot.
@@ -324,13 +586,14 @@ func superseded(id string, st *slotState, now time.Time) Signal {
 	}
 }
 
-func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result) Signal {
+func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result, feed string) Signal {
 	out := Signal{
 		ID: sig.ID, Symbol: sig.Symbol, HTF: sig.HTF, LTF: sig.LTF,
 		Status: sig.Status, Action: action, Direction: sig.Direction,
 		Entry: sig.Entry, StopLoss: sig.StopLoss, TakeProfit: sig.TakeProfit,
 		RiskReward: sig.RiskReward, Summary: sig.Summary, NextAction: sig.NextAction,
 		PublishedAt: sig.PublishedAt, ExpiresAt: sig.ExpiresAt,
+		FeedSource: feed,
 	}
 	if res != nil {
 		out.PassedMinRR = res.PassedMinRR
@@ -340,6 +603,8 @@ func (p *Publisher) toOut(sig signal.Signal, action signal.Action, res *Result) 
 		out.FinalZoneTP = res.FinalZoneTP
 		out.QuarterInfo = res.QuarterInfo
 		out.SSMTResult = res.SSMTResult
+		out.HTFSweep = res.HTFSweep
+		out.CISD = res.CISD
 	}
 	return out
 }

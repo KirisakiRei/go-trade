@@ -24,7 +24,30 @@ type FVG struct {
 	Candle1Time  time.Time `json:"candle1_time"`
 	Candle2Time  time.Time `json:"candle2_time"`
 	Candle3Time  time.Time `json:"candle3_time"`
-	Mitigated    bool      `json:"mitigated"`
+
+	// Mitigated menandakan ekor (wick) harga sudah menyentuh batas terjauh FVG.
+	// Ini aturan LAMA yang dipakai menyaring kandidat sweep 2-FVG. JANGAN diubah,
+	// karena perilaku entry live bergantung padanya.
+	//
+	// Mitigated BUKAN sinonim Invalidated. FVG bisa Mitigated=true (ekor sudah
+	// menyentuh atap/dasar zona) namun Invalidated=false (belum ada close yang
+	// menembus batas zona). Justru kondisi itu yang membuat FVG masih layak
+	// menghasilkan C2 Closure menurut dokumen baku ILA 2.0.
+	Mitigated bool `json:"mitigated"`
+
+	// Invalidated adalah aturan INVALIDASI versi dokumen baku ILA 2.0:
+	// FVG mati HANYA bila ada CLOSE yang menembus batas terjauh zona.
+	//   - Bearish / SIBI: close > Top
+	//   - Bullish / BISI: close < Bottom
+	// Wick boleh menembus batas zona tanpa membatalkan FVG.
+	Invalidated bool `json:"invalidated"`
+
+	// InvalidatedIndex adalah indeks candle pertama yang close-nya menembus batas
+	// zona. Bernilai -1 bila FVG belum invalid.
+	InvalidatedIndex int `json:"invalidated_index"`
+
+	// InvalidatedTime adalah waktu candle yang membuat FVG invalid.
+	InvalidatedTime time.Time `json:"invalidated_time"`
 }
 
 // HTFSweep represents an Imaginary Liquidity Sweep occurring inside an HTF FVG.
@@ -41,12 +64,19 @@ type HTFSweep struct {
 	StopLoss         float64           `json:"stop_loss"`  // Low (Buy) or High (Sell) of Candle 5 / current candle
 	TargetDOL        float64           `json:"target_dol"` // Draw on Liquidity (SSL / BSL)
 	Details          string            `json:"details"`
+
+	// C2Status dan C2Detail adalah STATUS PELENGKAP C2 Closure pada FVG acuan.
+	// Sifatnya informatif: tidak ada keputusan entry yang membaca field ini.
+	// Tujuannya agar hasil evaluasi engine bisa dibandingkan langsung dengan
+	// pembacaan chart manual memakai dokumen baku ILA 2.0.
+	C2Status C2Status `json:"c2_status,omitempty"`
+	C2Detail string   `json:"c2_detail,omitempty"`
 }
 
 // CISD represents Change In State of Delivery on LTF (body breaks body).
 type CISD struct {
 	Detected    bool              `json:"detected"`
-	Direction   string            `json:"direction"` // BEARISH or BULLISH
+	Direction   string            `json:"direction"`    // BEARISH or BULLISH
 	RefCandle   indicators.Candle `json:"ref_candle"`   // The opposing candle being broken
 	BreakCandle indicators.Candle `json:"break_candle"` // The candle that broke ref candle by body
 	BreakTime   time.Time         `json:"break_time"`
@@ -70,6 +100,12 @@ type ILASetup struct {
 	TakeProfit  float64   `json:"take_profit"`
 	RiskReward  float64   `json:"risk_reward"`
 	PassedMinRR bool      `json:"passed_min_rr"`
+
+	// ERLBias adalah bias dari Key Level ERL (Swing High / Swing Low 3 candle).
+	// Peran ERL di ILA 2.0 saat ini hanya sebagai PENENTU BIAS: tidak memicu
+	// entry dan tidak memfilter entry. Sifatnya informatif.
+	ERLBias string `json:"erl_bias,omitempty"`
+
 	NextAction  string    `json:"next_action"`
 	Summary     string    `json:"summary"`
 	EvaluatedAt time.Time `json:"evaluated_at"`

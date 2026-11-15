@@ -1,0 +1,479 @@
+package engine
+
+import (
+	"context"
+	"log/slog"
+	"testing"
+	"time"
+)
+
+// Pengujian ini mengunci satu janji penting: permintaan pasangan timeframe dari
+// Runner HANYA menyaring pasangan yang sudah sah menurut aturan trading engine.
+// Runner tidak boleh bisa meminta pasangan karangan, dan engine yang belum
+// menerima daftar pasangan harus tetap berperilaku seperti sebelum fitur ini ada.
+//
+// CATATAN JAM PASAR: Publisher.Scan berhenti lebih awal bila pasar tutup
+// (market.StateOf != Open). Semua pengujian di file ini menguji PENYARINGAN
+// pasangan timeframe, bukan jam pasar. Karena itu jamnya WAJIB dipatok ke hari
+// kerja, kalau tidak hasilnya berubah-ubah mengikuti hari test dijalankan
+// (gagal tiap Sabtu-Minggu). Gunakan jamPasarBuka() bersama WithClock.
+
+// jamPasarBuka mengembalikan clock tetap pada Senin 10:00 UTC, saat pasar buka.
+// Dipakai agar pengujian tidak bergantung pada waktu nyata.
+func jamPasarBuka() func() time.Time {
+	return func() time.Time {
+		return time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC) // Senin, pasar buka
+	}
+}
+
+// evaluatorEmpatPasangan meniru ILA 2.0: empat pasangan tetap.
+func evaluatorEmpatPasangan() *fakeEvaluator {
+	return &fakeEvaluator{
+		strategy: "ila-2.0",
+		pairs: []Pair{
+			{HTF: "W", LTF: "H4"},
+			{HTF: "D1", LTF: "H1"},
+			{HTF: "H4", LTF: "M15"},
+			{HTF: "H1", LTF: "M5"},
+		},
+		results: map[string]*Result{
+			"W|H4":   readyResult(),
+			"D1|H1":  readyResult(),
+			"H4|M15": readyResult(),
+			"H1|M5":  readyResult(),
+			"H2|M30": readyResult(),
+		},
+	}
+}
+
+func TestPasanganKosongMenghitungSemua(t *testing.T) {
+	// Perilaku lama: tanpa daftar pasangan, engine menghitung seluruh pasangan.
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+	dipanggil := &[]string{}
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 4 {
+		t.Fatalf("pasangan kosong harus menghitung 4 pasangan, dapat %d: %v", len(*dipanggil), *dipanggil)
+	}
+}
+
+func TestPasanganDimintaMenyaringTanpaMenambah(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs:   []Pair{{HTF: "H4", LTF: "M15"}},
+	})
+
+	dipanggil := &[]string{}
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 1 || (*dipanggil)[0] != "H4|M15" {
+		t.Fatalf("hanya H4|M15 yang boleh dihitung, dapat %v", *dipanggil)
+	}
+}
+
+func TestPasanganDiLuarAturanTidakDitambahkan(t *testing.T) {
+	// Runner meminta pasangan yang tidak ada di aturan trading engine.
+	// Engine tidak boleh mengarangnya, dan juga tidak boleh diam-diam
+	// kembali ke empat pasangan bawaan.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs:   []Pair{{HTF: "H2", LTF: "M30"}},
+	})
+
+	dipanggil := &[]string{}
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 0 {
+		t.Fatalf("pasangan di luar aturan tidak boleh dievaluasi, dapat %v", *dipanggil)
+	}
+}
+
+func TestGabunganPasanganBeberapaPelanggan(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID: "runner-a", Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs: []Pair{{HTF: "H4", LTF: "M15"}},
+	})
+	reg.Add(Subscriber{
+		ID: "runner-b", Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs: []Pair{{HTF: "W", LTF: "H4"}},
+	})
+
+	dipanggil := &[]string{}
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 2 {
+		t.Fatalf("gabungan dua pelanggan harus 2 pasangan, dapat %v", *dipanggil)
+	}
+}
+
+func TestSatuPelangganMemintaSemuaMembatalkanPenyaringan(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID: "sempit", Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs: []Pair{{HTF: "H4", LTF: "M15"}},
+	})
+	reg.Add(Subscriber{
+		ID: "luas", Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs: nil, // semua pasangan
+	})
+
+	dipanggil := &[]string{}
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 4 {
+		t.Fatalf("permintaan semua pasangan harus menghitung 4, dapat %v", *dipanggil)
+	}
+}
+
+func TestSetPairsMenggantiDaftar(t *testing.T) {
+	// Perubahan saklar di platform tiba sebagai Subscribe ulang.
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	if !reg.SetPairs("runner", []Pair{{HTF: "W", LTF: "H4"}}) {
+		t.Fatal("SetPairs harus menemukan pelanggan yang terdaftar")
+	}
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if !dibatasi || len(pairs) != 1 || pairs[0] != (Pair{HTF: "W", LTF: "H4"}) {
+		t.Fatalf("pasangan tidak terganti, dapat %v (dibatasi=%v)", pairs, dibatasi)
+	}
+
+	// Daftar kosong kembali berarti semua pasangan.
+	reg.SetPairs("runner", nil)
+	if _, dibatasi := reg.WantedPairs("XAUUSD"); dibatasi {
+		t.Fatal("daftar kosong harus berarti semua pasangan")
+	}
+}
+
+func TestILA3CyclePairsAndNormalization(t *testing.T) {
+	eval := NewILA3Evaluator(nil)
+	if eval.StrategyVersion() != "ila-3.0" {
+		t.Errorf("expected strategy ila-3.0, got %s", eval.StrategyVersion())
+	}
+
+	pairs := eval.Pairs()
+	if len(pairs) != 4 {
+		t.Fatalf("expected 4 cycle pairs for ILA 3.0, got %d", len(pairs))
+	}
+
+	// Pastikan ke-4 siklus terdaftar
+	expectedCycles := map[string]bool{
+		"4H|5m": true, // Daily
+		"D|15m": true, // Weekly
+		"1H|5m": true, // 90M
+		"W|1H":  true, // Monthly
+	}
+	for _, p := range pairs {
+		k := p.HTF + "|" + p.LTF
+		if !expectedCycles[k] {
+			t.Errorf("unexpected pair %s", k)
+		}
+	}
+
+	// Uji toleransi normalisasi timeframe
+	normCases := []struct {
+		inputHTF string
+		inputLTF string
+		wantMode string
+	}{
+		{"4H", "5m", "Daily Cycle (New Day)"},
+		{"H4", "M5", "Daily Cycle (New Day)"},
+		{"D", "15m", "Weekly Cycle (New Week)"},
+		{"D1", "M15", "Weekly Cycle (New Week)"},
+		{"1H", "5m", "90M Cycle (Intraday)"},
+		{"H1", "M5", "90M Cycle (Intraday)"},
+		{"W", "1H", "Monthly Cycle (New Month)"},
+		{"W1", "H1", "Monthly Cycle (New Month)"},
+	}
+
+	ila3Eval := eval.(*ila3Evaluator)
+	for _, tc := range normCases {
+		p, ok := ila3Eval.presetOf[tc.inputHTF+"|"+tc.inputLTF]
+		if !ok {
+			p, ok = ila3Eval.presetOf[normTF(tc.inputHTF)+"|"+normTF(tc.inputLTF)]
+		}
+		if !ok {
+			t.Errorf("pair %s|%s not found in presetOf", tc.inputHTF, tc.inputLTF)
+		} else if p.Mode != tc.wantMode {
+			t.Errorf("pair %s|%s expected mode %s, got %s", tc.inputHTF, tc.inputLTF, tc.wantMode, p.Mode)
+		}
+	}
+}
+
+func TestPasanganTidakLengkapDibuang(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
+	reg.SetPairs("runner", []Pair{
+		{HTF: "", LTF: "M15"},
+		{HTF: "H4", LTF: ""},
+		{HTF: "H4", LTF: "M15"},
+		{HTF: "H4", LTF: "M15"}, // duplikat
+	})
+
+	pairs, _ := reg.WantedPairs("XAUUSD")
+	if len(pairs) != 1 {
+		t.Fatalf("pasangan tidak lengkap dan duplikat harus dibuang, dapat %v", pairs)
+	}
+}
+
+// pencatatEvaluator merekam pasangan mana yang benar-benar dievaluasi.
+type pencatatEvaluator struct {
+	inner *fakeEvaluator
+	log   *[]string
+}
+
+func (p *pencatatEvaluator) StrategyVersion() string { return p.inner.StrategyVersion() }
+func (p *pencatatEvaluator) Pairs() []Pair           { return p.inner.Pairs() }
+func (p *pencatatEvaluator) Evaluate(symbol, htf, ltf string) (*Result, error) {
+	*p.log = append(*p.log, htf+"|"+ltf)
+	return p.inner.Evaluate(symbol, htf, ltf)
+}
+
+var _ = time.Now
+
+func TestPairsForDenganNormalisasiBerbeda(t *testing.T) {
+	eval := NewILA3Evaluator(nil)
+	reg := NewRegistry()
+	pub := NewPublisher(eval, reg, Version{Strategy: "ila-3.0"}, slog.Default())
+
+	// Runner meminta pasangan dalam format huruf besar (mis. 4H-5M dari NormalizeTimeframe),
+	// sedangkan preset evaluator mendefinisikan 4H-5m.
+	reg.Add(Subscriber{
+		ID:      "runner-ila3",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		Pairs: []Pair{
+			{HTF: "4H", LTF: "5M"},
+			{HTF: "H4", LTF: "M5"}, // variasi lain yang sama
+			{HTF: "D1", LTF: "15M"},
+		},
+	})
+
+	pairs := pub.pairsFor("XAUUSD")
+	if len(pairs) != 2 {
+		t.Fatalf("pairsFor harus menghasilkan 2 pasangan kanonikal unik, dapat %d: %v", len(pairs), pairs)
+	}
+
+	// Pastikan pasangan kanonikal evaluator yang dikembalikan
+	expected := map[Pair]bool{
+		{HTF: "4H", LTF: "5m"}: true,
+		{HTF: "D", LTF: "15m"}: true,
+	}
+	for _, p := range pairs {
+		if !expected[p] {
+			t.Errorf("pasangan kanonikal tidak terduga: %v", p)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-simbol: kebijakan pasangan timeframe tidak boleh bocor antar simbol.
+// ---------------------------------------------------------------------------
+
+func TestWantedPairsSimbolTanpaKebijakanMemakaiSemua(t *testing.T) {
+	// Simbol yang belum pernah diatur harus mendapat seluruh pasangan bawaan,
+	// bukan nil — kalau salah, simbol itu mati diam-diam.
+	reg := NewRegistry()
+	reg.Add(Subscriber{ID: "runner", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if dibatasi {
+		t.Fatalf("simbol tanpa kebijakan tidak boleh dianggap dibatasi")
+	}
+	if len(pairs) != 0 {
+		t.Fatalf("tanpa pembatasan engine memakai daftar evaluator, pairs harus kosong, dapat %v", pairs)
+	}
+}
+
+func TestWantedPairsSatuSimbolDibatasi(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+		},
+	})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if !dibatasi {
+		t.Fatalf("simbol dengan kebijakan restricted harus dianggap dibatasi")
+	}
+	if len(pairs) != 2 {
+		t.Fatalf("harus dapat 2 pasangan, dapat %d: %v", len(pairs), pairs)
+	}
+}
+
+func TestWantedPairsRestrictedKosongTidakDievaluasi(t *testing.T) {
+	// Opsi A: semua switch dimatikan. Hasilnya harus "dibatasi tapi kosong",
+	// bukan "tidak dibatasi".
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: nil, Restricted: true},
+		},
+	})
+
+	pairs, dibatasi := reg.WantedPairs("XAUUSD")
+	if !dibatasi {
+		t.Fatalf("restricted kosong tetap harus dianggap dibatasi")
+	}
+	if len(pairs) != 0 {
+		t.Fatalf("restricted kosong harus tanpa pasangan, dapat %v", pairs)
+	}
+}
+
+func TestWantedPairsTidakBocorAntarSimbol(t *testing.T) {
+	// INTI PERBAIKAN: XAUUSD punya 2 pasangan, EURUSD punya 4. Daftar satu
+	// simbol tidak boleh ikut ke simbol lain.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+			"EURUSD": {
+				Pairs: []Pair{
+					{HTF: "W", LTF: "H4"},
+					{HTF: "D1", LTF: "H1"},
+					{HTF: "H4", LTF: "M15"},
+					{HTF: "H1", LTF: "M5"},
+				},
+				Restricted: true,
+			},
+		},
+	})
+
+	xau, _ := reg.WantedPairs("XAUUSD")
+	eur, _ := reg.WantedPairs("EURUSD")
+
+	if len(xau) != 2 {
+		t.Fatalf("XAUUSD harus 2 pasangan, dapat %d: %v", len(xau), xau)
+	}
+	if len(eur) != 4 {
+		t.Fatalf("EURUSD harus 4 pasangan, dapat %d: %v", len(eur), eur)
+	}
+	for _, p := range xau {
+		for _, q := range eur {
+			if p == q {
+				// Boleh saja ada pasangan yang sama di dua simbol; yang salah
+				// adalah jumlahnya ikut tercampur seperti bug aslinya.
+				continue
+			}
+		}
+	}
+}
+
+func TestWantedPairsSimbolTidakAdaDiPetaMemakaiSemua(t *testing.T) {
+	// kebijakan ada untuk XAUUSD saja; EURUSD harus tetap penuh.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: []Pair{{HTF: "H1", LTF: "M5"}}, Restricted: true},
+		},
+	})
+
+	eur, dibatasi := reg.WantedPairs("EURUSD")
+	if dibatasi || len(eur) != 0 {
+		t.Fatalf("EURUSD tanpa entri di peta harus memakai semua pasangan, dapat dibatasi=%v pairs=%v", dibatasi, eur)
+	}
+}
+
+func TestWantedPairsSatuPelangganTanpaBatasanMembatalkan(t *testing.T) {
+	// Satu pelanggan minta semua pasangan -> pembatasan simbol itu batal,
+	// supaya sinyalnya tetap dihitung.
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner-a",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: []Pair{{HTF: "H1", LTF: "M5"}}, Restricted: true},
+		},
+	})
+	reg.Add(Subscriber{ID: "runner-b", Symbols: map[string]struct{}{"XAUUSD": {}}})
+
+	_, dibatasi := reg.WantedPairs("XAUUSD")
+	if dibatasi {
+		t.Fatalf("pelanggan tanpa batasan harus membatalkan pembatasan simbol")
+	}
+}
+
+func TestPairsForRestrictedKosongTidakEvaluasi(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Pairs: nil, Restricted: true},
+		},
+	})
+	pub := NewPublisher(evaluatorEmpatPasangan(), reg, Version{Strategy: "ila-2.0"}, discards()).WithClock(jamPasarBuka())
+
+	dipanggil := &[]string{}
+	pub.eval = &pencatatEvaluator{inner: evaluatorEmpatPasangan(), log: dipanggil}
+	pub.Scan(context.Background())
+
+	if len(*dipanggil) != 0 {
+		t.Fatalf("restricted kosong tidak boleh mengevaluasi apa pun, dapat %v", *dipanggil)
+	}
+}
+
+func TestPairsForSimbolLainTetapJalan(t *testing.T) {
+	// XAUUSD dimatikan total, EURUSD dibatasi 2: evaluasi hanya untuk EURUSD.
+	fake := evaluatorEmpatPasangan()
+	reg := NewRegistry()
+	reg.Add(Subscriber{
+		ID:      "runner",
+		Symbols: map[string]struct{}{"XAUUSD": {}, "EURUSD": {}},
+		SymbolPairs: map[string]PairPolicy{
+			"XAUUSD": {Restricted: true},
+			"EURUSD": {
+				Pairs:      []Pair{{HTF: "H4", LTF: "M15"}, {HTF: "H1", LTF: "M5"}},
+				Restricted: true,
+			},
+		},
+	})
+	pub := NewPublisher(fake, reg, Version{Strategy: "ila-2.0"}, discards())
+
+	xau := pub.pairsFor("XAUUSD")
+	eur := pub.pairsFor("EURUSD")
+
+	if len(xau) != 0 {
+		t.Fatalf("XAUUSD dimatikan, harus 0 pasangan, dapat %v", xau)
+	}
+	if len(eur) != 2 {
+		t.Fatalf("EURUSD harus 2 pasangan, dapat %d: %v", len(eur), eur)
+	}
+}

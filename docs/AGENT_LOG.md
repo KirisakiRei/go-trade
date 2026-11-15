@@ -16,7 +16,7 @@
 
 ## 📍 PENANDA SINKRONISASI
 
-> **Commit terakhir saat log ini ditulis:** `7d60464`
+> **Commit terakhir saat log ini ditulis:** `d99b698` (merge PR #4 ke `develop`)
 > **Tag titik sinkron:** `sync/2026-11-07-friday-gate`
 
 ### Cara pakai (untuk Hermes / Human / Claude)
@@ -68,6 +68,212 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 ---
 
 ## ⬇️ DARI HUMAN KE HERMES
+
+### [2026-11-15] PERBAIKAN — ILA 2.0: acuan FVG termuda, batas umur, dan CISD wajib berderetan
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di branch `fix/ila-fvg-acuan-terminuda-dan-cisd-deretan` (belum di-merge ke `develop`, **belum di-deploy ke VPS 1**)
+- **Asal:** diselaraskan dengan `go-ila-platform` commit `86433bf` yang sudah berjalan di backtest produksi
+
+#### Latar belakang
+Laporan trader: hasil backtest terlalu agresif mengeksekusi **FVG jadul**, dan ada setup sell yang clean tetapi tidak terdeteksi sweep-nya. Setelah penelusuran, ada tiga sebab yang berdiri sendiri.
+
+| # | Gejala | Akar masalah |
+|---|---|---|
+| 1 | Entry muncul dari zona berhari-hari lalu | **Blok cadangan CISD** memungut candle berlawanan mana saja yang ditemui saat menyisir mundur, termasuk dari Candle 4, lalu memakai candle ekstrem sendiri sebagai penembusnya |
+| 2 | Acuan bukan struktur terakhir | `latestFVG := activeFVGs[len(activeFVGs)-1]` mengambil **elemen terakhir daftar**, bukan yang **candle pembentuknya paling akhir** |
+| 3 | FVG baru dianggap `Mitigated`/dijangkau secara keliru | Pemindaian jarak ikut menghitung **candle pembentuk FVG itu sendiri**, yang menurut definisi memang berada di dalam zonanya |
+
+**Kasus nyata yang mengunci tiap perbaikan:**
+- **USTEC 9 Okt 2026 21:00 NY** — entry SELL palsu dengan SL 8,7 poin. Terbukti lahir dari blok cadangan (#1).
+- **XAUUSD H4 12 Nov 2026** — FVG bearish besar `3887.64-3924.74` disapu candle 18:00 dan 22:00, sementara FVG bullish kecil `3886.93-3888.47` (lahir 10:00) tidak pernah disentuh lagi. Setup SELL ini **sah** dan harus tetap muncul (#2, #3).
+
+#### Perubahan (`pkg/ila/evaluator.go`)
+1. **Blok cadangan CISD dihapus** (sisi BEARISH `firstBear` dan BULLISH `firstBull`). Tanpa deretan candle berlawanan yang **bersambung** menuju titik ekstrem, memang belum ada CISD. `return nil, false`.
+2. **Acuan dipilih dari yang TERMUDA.**
+   - `latestFVG` diambil dengan membandingkan `Candle3Index`, bukan posisi di daftar.
+   - **Urutan disengaja: pilih dulu, baru uji syaratnya.** Versi sebelumnya menyaring dulu lalu memilih yang termuda di antara yang lolos, sehingga bila FVG termuda gagal syarat mesin diam-diam mundur ke FVG lebih tua.
+3. **`umurMaksimalFVG = 6`** — batas umur FVG dalam candle HTF sejak Candle 3. Diukur relatif, jadi berlaku sama untuk semua timeframe dan pasangan tanpa angka khusus per simbol. Angka enam hasil pengukuran pada feed asli: batas empat membuang entry sah EURUSD 12 Nov 2026 09:45 NY yang berakhir TP.
+4. **`fvgMasihDijangkauHarga`** — syarat harga masih menyentuh zona (bearish: `High >= Bottom - tol`; bullish: `Low <= Top + tol`), memakai `getFVGTolerance` yang sudah ada. Pemindaian dimulai dari **candle setelah Candle 3**, bukan dari Candle 3 itu sendiri.
+5. **`cariSweepPadaFVGLebihTua`** — satu keadaan khusus yang dijaga: bila FVG termuda **tidak** dijangkau harga, acuan diperiksa pada FVG lebih tua **dari yang termuda ke belakang** dan **berhenti pada sweep sah pertama**. Ini bukan menyisir FVG usang; inilah yang mempertahankan setup XAUUSD 12 Nov tanpa membuka pintu entry dari struktur lama.
+
+#### Kenapa aturan ini tidak bertabrakan dengan PR sebelumnya
+PR `d59e936` sudah mengizinkan penelusuran **maksimal dua FVG aktif** dan memilih **sweep terlama**. Perbaikan ini tidak menghapus aturan itu; yang berubah adalah **cara memilih acuan pertama** (termuda, bukan elemen terakhir) dan **adanya syarat umur serta jarak** sebelum acuan dipakai. Kasus 12 Nov tetap lolos lewat jalur yang sama.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (`umurMaksimalFVG`, `fvgMasihDijangkauHarga`, `DetectHTFIlaSweep`, `cariSweepPadaFVGLebihTua`; hapus blok cadangan CISD)
+- `pkg/ila/fvg_acuan_test.go` (baru)
+- `pkg/ila/cisd_deretan_test.go` (baru)
+
+#### Verifikasi
+- **`go build ./...` bersih, `go test ./...` seluruh paket hijau.**
+- **Empat test baru, dan terbukti MERAH lebih dulu pada kode lama:**
+  - `TestCISDTidakTerbentukTanpaDeretan` — pada kode lama menghasilkan CISD palsu level `3005.00` dari candle sweep; sekarang `nil`. **Ini reproduksi langsung USTEC 9 Okt.**
+  - `TestFVGTermudaGagalTidakMundurKeFVGLebihTua` — versi lama masih melaporkan acuan arah dari FVG tertua walau tak satu pun disapu pasar.
+  - `TestFVGTerpilihYangTermuda` — mengunci pemilihan `Candle3Index`, bukan posisi daftar.
+  - `TestCISDTetapTerbentukDariDeretanSah` — pagar anti-regresi: deretan bearish yang sah tetap membentuk CISD dengan level `3000.00`.
+- **Test lama yang dipertahankan sebagai pagar aturan yang sudah disahkan trader:**
+  - `TestCISDOriginCanFormInPriorCandleRun` / `TestCISDOriginBullishCanFormInPriorCandleRun` — origin CISD **boleh** berawal di Candle 4 (dasar kasus 6 Nov dan 11 Nov).
+  - `TestFVGTerpilihYangTermuda` (varian XAUUSD 12 Nov) — setup SELL 12 Nov tetap sah.
+
+#### Catatan penting untuk Hermes
+- **Blok cadangan CISD dihapus permanen.** Jangan dikembalikan dengan alasan "menambah peluang entry": itulah sumber entry palsu USTEC 9 Okt, dan gejalanya berupa SL yang salah posisi, bukan sekadar entry yang meleset.
+- **Urutan pemilihan FVG jangan dibalik** (saring dulu → pilih termuda). Membalik urutannya mengembalikan perilaku "mundur ke FVG lebih tua" yang sedang dibereskan.
+- **`umurMaksimalFVG` bukan preferensi.** Mengubah angka 6 wajib disertai pengukuran ulang pada feed asli; batas 4 sudah terbukti membuang entry sah.
+- **`fvgMasihDijangkauHarga` memakai INDEKS candle**, jadi pemanggilnya wajib memberikan slice candle lengkap yang memuat Candle 1..3 pembentuk FVG. Memberi slice terpisah (hanya candle setelah FVG) membuat fungsi ini buta.
+- **Belum ada yang di-deploy.** Live VPS 1 masih memakai aturan lama sampai branch ini di-review dan di-merge.
+
+---
+
+### [2026-11-15] PERBAIKAN — ILA 2.0: C2 Closure, ERL 3-candle, invalidasi IRL berbasis close
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di branch `revisi-ila-2` (belum di-merge ke `develop`, belum di-deploy)
+
+#### Latar belakang
+Trader pemilik ILA 2.0 menyerahkan 4 dokumen baku (`key-level-erl.md`, `key-level-irl.md`, `c2-closure-erl.md`, `c2-closure-irl.md`) yang mendefinisikan **C2 Closure** pada key level ERL dan IRL. Implementasi `pkg/ila` belum mengikuti dokumen itu, sehingga menolak setup yang sah.
+
+**Dua kasus nyata XAUUSD H4 yang dikonfirmasi trader sebagai setup SELL sah, tetapi ditolak engine:**
+
+| Kasus | Data | Hasil engine lama |
+|---|---|---|
+| **28 Aug 2026** | FVG bearish `4471.71-4589.18`. C1 = 06:00 (Low 4589.18), C2 = 10:00 (O 4604.94 → C 4469.52), C3 = 14:00 (High 4471.71). Candle 30 Aug 18:00: H 4472.14, L 4434.81, C 4440.30. Pasar tutup Jumat sehingga tidak ada candle perantara. | `Detected=false` |
+| **11 Sep 2026** | FVG bearish `4400.32-4405.77`. C1 = 09 Sep 22:00, C2 = 10 Sep 02:00, C3 = 10 Sep 06:00 (High 4400.32). Candle 11 Sep 10:00: H 4402.67, L 4352.06, C 4358.36. | `Detected=false` |
+
+**Akar masalah:** engine membandingkan dengan **high/low candle TEPAT SEBELUMNYA** (`ck.High > cPrev.High`, `ck.Close <= cPrev.High`) dan mensyaratkan candle sebelumnya sudah berada di dalam zona (`cPrev.High >= Bottom && cPrev.High < Top`). Dokumen tidak memakai kedua syarat itu; dokumen membandingkan dengan **LEVEL ACUAN FVG yang bergeser**.
+
+#### Perubahan (5 commit)
+
+1. **`07811a3` — Invalidasi FVG berbasis close.**
+   - Field baru `FVG.Invalidated`, `InvalidatedIndex`, `InvalidatedTime` (dokumen `key-level-irl.md` §3: invalidasi HANYA dari close yang menembus batas terjauh zona).
+   - **Sengaja dipisah** dari `Mitigated` (wick + toleransi spread) yang tetap dipakai menyaring kandidat sweep, sehingga perilaku entry lama tidak berubah.
+
+2. **`22967d4` — Detektor ERL 3-candle mandiri (`pkg/ila/erl.go`).**
+   - `FindSwingERL` (pembentukan saja), `SwingERLStatus` (invalidasi close), `LatestSwingERL`, `ERLBiasOf`.
+   - **Tidak memakai `pkg/keylevels`** — paket itu milik ILA 3.0 dengan fractal 5-bar + mitigasi wick. Dua engine, dua rules, harus terpisah.
+   - `ERLBiasOf` memakai swing **TERAKHIR**, bukan swing terakhir yang masih valid: close yang menembus level swing memang men-invalidasi swing itu, dan justru itulah tanda bias terkuat.
+
+3. **`cabaccc` — C2 IRL/ERL memakai sumber tunggal invalidasi.**
+   - `EvaluateC2IRL` membaca `FVG.Invalidated`; `EvaluateC2ERL` memanggil `SwingERLStatus`. Tidak ada aturan invalidasi yang dikodekan dua kali.
+   - **Urutan 4 (ACUAN BERGESER)** kini cabang tersendiri: candle menyentuh acuan, close melewatinya tetapi masih di zona → C2 lama gugur, acuan pindah ke high/low candle itu.
+   - `EvaluateC2ERL` menerima `SwingERL` utuh agar indeks candle kanan tidak bisa salah pasang.
+
+4. **`f8807a5` — Status C2 & bias ERL di ringkasan (additive).**
+   - `HTFSweep.C2Status` / `C2Detail`, `ILASetup.ERLBias`.
+   - `detectSweepPadaFVG` jadi wrapper tipis di atas `detectSweepPadaFVGInti` (logika sweep lama, tanpa perubahan). Field C2 hanya ditempel, **tidak pernah dibaca keputusan entry**.
+
+5. **`d59e936` — Sweep memakai definisi C2 Closure draft.**
+   - Pembanding sweep menjadi `acuan`, dihitung dari candle 3 sampai `k-1` dengan aturan Urutan 3 + Urutan 4.
+   - Syarat lama "candle sebelumnya wajib di dalam zona" dihapus (tidak ada di dokumen).
+   - **Dua test lama diubah atas keputusan pemilik sistem (opsi A):** `TestFakeSweepCandle3Rejected` → `TestSweepLangsungSetelahCandle3Diterima`, dan `TestSingleFVGStillRejectsCandle3Sweep` → `TestSingleFVGSweepAcuanDiterima`.
+
+#### Kenapa dua kasus lolosnya lewat jalur berbeda (penting)
+
+- **Kasus 28 Aug** lolos karena candle s=3 (30 Aug 18:00) langsung menyapu acuan awal `4471.71` (high 4472.14) dan ditolak (close 4440.30). Yang berperan di sini adalah **penghapusan syarat "parkir di zona"**.
+- **Kasus 11 Sep** lolos karena candle s=4 (high `4402.60`) menyentuh acuan `4400.32` lalu **acuan bergeser** ke `4402.60`; candle s=9 (high `4402.67`) menyapu acuan baru itu dan ditolak. Yang berperan di sini adalah **Urutan 4 (acuan bergeser)**.
+
+#### File Terdampak
+- `pkg/ila/types.go` (+`Invalidated*`, `C2Status`, `C2Detail`, `ERLBias`)
+- `pkg/ila/evaluator.go` (`FindFVGs` + invalidasi close; `detectSweepPadaFVG` wrapper; sweep pakai `acuan`; `EvaluateILA` isi `ERLBias`)
+- `pkg/ila/erl.go` (baru)
+- `pkg/ila/c2.go` (baru, lalu dirapikan)
+- `pkg/ila/evaluator_test.go` (2 test diubah)
+- Test baru: `invalidated_test.go`, `erl_test.go`, `c2_urutan4_test.go`, `c2_integrasi_test.go`, `c2_kasus_h4_test.go`
+
+#### Verifikasi
+- **69 test `pkg/ila` PASS** (baseline 38 → 69).
+- **Bukti MERAH lebih dulu:** kedua kasus H4 dijalankan dengan logika lama dan terbukti `Detected=false` sebelum diperbaiki, lalu `Detected=true` sesudahnya.
+- **Uji mutasi (semua tertangkap):** (a) invalidasi IRL pakai wick bukan close; (b) invalidasi ERL pakai wick; (c) `mid.Low <` → `<=`; (d) candle kanan running diabaikan; (e) hapus Urutan 4; (f) close tepat di acuan dianggap C2; (g) acuan awal pakai batas zona bukan high/low C3; (h) kembalikan `cPrev.High` sebagai pembanding → Kasus 11 Sep MERAH lagi.
+- **Pagar anti-regresi:** `TestSweepEntryTidakBerubah` (wrapper vs fungsi inti) dan `TestSweepC2StatusTidakDibaca` (mengubah `C2Status` manual tidak mengubah keputusan).
+- `go build ./pkg/... ./internal/... ./cmd/...` dan `go vet ./pkg/ila/` bersih.
+- `pkg/keylevels/` dan `pkg/sequence/` **tidak disentuh**.
+
+#### Catatan penting
+- **`TestPasangan*` di `internal/engine` GAGAL, tetapi sudah gagal di `develop` sebelum perubahan ini** (diverifikasi lewat `git worktree` pada commit `e7cbc3b`). Bukan regresi dari pekerjaan ini.
+- Syarat "candle sebelumnya wajib di dalam zona" **dihapus permanen**. Konsekuensinya lebih banyak setup lolos. Ini keputusan pemilik sistem (opsi A), bukan asumsi agent.
+- Peran ERL di ILA 2.0 saat ini **hanya bias** (informatif). Belum memicu entry dan belum memfilter entry.
+
+---
+
+### [2026-11-14] PERBAIKAN — ILA 2.0: dua FVG (sweep terlama menang) + jendela eksekusi Candle 6 dengan SL Candle 5
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di `develop` (belum di-deploy ke VPS 1)
+
+#### Ringkasan
+1. **Dua FVG: sweep sah dari FVG sebelumnya tidak lagi dibuang (`pkg/ila/evaluator.go`).**
+   - **Akar masalah:** `DetectHTFIlaSweep` mengunci murni pada `activeFVGs[len-1]` (FVG aktif TERBARU). Satu candle HTF bisa sekaligus menutup sweep sah pada FVG lama **sambil** membentuk FVG baru di arah berlawanan, sehingga sweep yang sah hilang.
+   - **Kasus nyata XAUUSD H4 (12-13 Nov):** candle #58 menyapu ekor #57 di dalam FVG bearish `3887.64-3924.74`, tetapi candle #58 juga membentuk FVG bullish `3886.93-3888.47`. Karena hanya FVG terbaru (bullish) yang diperiksa, XAUUSD tidak pernah memunculkan alert SELL.
+   - **Perbaikan:** isi perulangan sweep dipindah apa adanya ke helper `detectSweepPadaFVG` (terbukti identik byte-per-byte), lalu `DetectHTFIlaSweep` menelusuri **maksimal 2 FVG aktif** (terbaru + kronologis sebelumnya) dan memilih **sweep TERLAMA** yang sah. Aturan: *sell yang terjadi lebih dulu dieksekusi, buy-nya dilewati*.
+   - **Filter kronologis memakai `>` bukan `>=`:** dua FVG sah boleh berbagi candle (C3 FVG lama = C1 FVG baru). Versi ketat `>=` sempat menjadi bug dan sudah ditangkap test.
+2. **Jendela eksekusi dinamis sampai Candle 6 (`pkg/ila/evaluator.go`).**
+   - **Akar masalah:** `if candle5Idx < lastHTFIdx` mematikan setup seketika Candle 5 berganti ke Candle 6. Kasus nyata EURUSD H4-M15: candle M15 08:45 NY ditutup 09:00 NY menembus origin CISD `1.10505` by body, tetapi feed H4 09:00:00 NY sudah memunculkan Candle 6 running, sehingga setup batal tepat di detik entry seharusnya sah.
+   - **Perbaikan:** kadaluarsa baru terjadi saat Candle 6 **CLOSED** tanpa CISD (`lastHTFIdx > candle5Idx+1 || (lastHTFIdx == candle5Idx+1 && !running)`).
+   - **SL dikunci High/Low Candle 5** saat di Candle 6, menggantikan `cisd.ExtremeSL`. Alasannya struktural: `ExtremeSL` di `DetectDynamicCISD` adalah ekstrem Candle 5 — titik yang membentuk CISD — sehingga SL di sana konsisten. `ExtremeSL` LTF tidak boleh menimpa lagi.
+   - **Koreksi klaim:** catatan asal menyebut SL Candle 5 "menghemat pips". Itu keliru — SL jadi **lebih lebar** dari `ExtremeSL` LTF, sehingga lot mengecil. Yang didapat adalah proteksi struktural, bukan hemat pips.
+3. **Catatan proses:** PR `feat/ila-dynamic-candle6-window-and-sl` ikut membawa perubahan `pkg/ila` lain yang sudah ditolak di `develop` (`activeFVGs[len-2]`, hapus toleransi spread, ganti `cPrev.High < Top` menjadi `cPrev.Close <= Top`) dan menyisakan hanya 9 test (develop 17). Karena itu **tidak di-merge**; hanya ide jendela Candle 6 + SL Candle 5 yang diambil dan ditulis ulang di atas `develop`.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (+135 / −12)
+- `pkg/ila/evaluator_test.go`
+
+#### Verifikasi
+- **21 test `pkg/ila` PASS** (17 lama + 4 baru). Test baru: `TestXAUUSDRegresiSweepFVGSebelumnya`, `TestDuaFVGSweepTerlamaMenang`, `TestFVGSebelumnyaBolehBerbagiCandle`, `TestILASetupLanjutDiCandle6Running`, `TestILASetupExpiredWhenCandle6Closed`.
+- `TestILASetupExpiredWhenCandle5Closed` diganti menjadi `TestILASetupLanjutDiCandle6Running` karena mengunci aturan yang sengaja diubah.
+- **Uji mutasi (semua tertangkap, kembali MERAH):** (a) batas kandidat 2→1; (b) pemilihan `Before`→`After`; (c) filter `>`→`>=`; (d) kembalikan `candle5Idx < lastHTFIdx`; (e) matikan penjangkaran SL Candle 5.
+- `go build ./...`, `go vet ./...`, `go test ./...` (20 paket) hijau.
+- **End-to-end data pasar nyata:** `go run ./cmd/cli -symbol XAUUSD -htf H4 -ltf M15` → `READY_TO_ENTRY` SELL pada FVG bearish `3887.64-3924.74`.
+- `pkg/sequence/` (ILA 3.0), `publisher.go`, dan jalur Runner **tidak disentuh**.
+
+#### Catatan untuk Hermes
+- Aturan body-break (`ck.Close <= cPrev.High` / `>= cPrev.Low`) **tidak boleh** dilonggarkan saat menelusuri dua FVG.
+- Filter sweep zombie `k < n-3` tetap dipertahankan. Perhatikan: saat Candle 6 sudah closed dan masuk Candle 7, sweep Candle 4 berada di `n-4` sehingga dibuang filter ini **sebelum** cek EXPIRED berjalan. Hasil akhirnya tetap benar (`WAIT_HTF_SWEEP`), tetapi pesannya "Menunggu candle masuk…" bukan "kadaluarsa". Jangan diubah tanpa menguji ulang keduanya.
+
+### [2026-11-11] PERBAIKAN — Pair timeframe per simbol (switch `watch` tidak bocor antar simbol)
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di `develop` (belum di-deploy ke VPS 1)
+- **Ringkasan:**
+  - **Akar masalah:** `SubscribeRequest.Pairs` adalah satu daftar global untuk SEMUA simbol. Karena satu-satunya baris switch di DB adalah `USTEC · D·15M`, simbol lain (termasuk XAUUSD) ikut hanya dievaluasi pada `D·15M`. Log produksi: `"rinci":"... XAUUSD:1"` padahal UI meminta 4 pair untuk ILA 3.0.
+  - **Bug kedua (senyap):** `hitungPasangan()` membentuk fingerprint `metode:htf/ltf` — **tanpa simbol**. Akibatnya mengubah switch satu simbol bisa TIDAK mengubah fingerprint, sehingga sync ke engine tidak pernah terpicu (interval 2 menit).
+  - **Perbaikan:** kontrak gRPC baru `map<string, SymbolPairs> symbol_pairs = 6` dengan `SymbolPairs{ repeated Pair pairs = 1; bool restricted = 2; }`. Field lama `pairs = 3` **DIPERTAHANKAN** sebagai jalur rollback/kompatibilitas engine lama.
+  - **Semantik `restricted`:** `false` = simbol belum pernah diatur → engine memakai seluruh pair bawaan. `true` = daftar bersifat final; kosong berarti simbol sengaja **tidak dievaluasi** (Opsi A).
+  - Satu subscriber dengan `restricted=false` membatalkan pembatasan untuk simbol itu.
+  - WARN sekali per simbol `"evt":"pairs.semua.mati"` agar operator tahu simbol mati karena disengaja, bukan bug.
+- **File terdampak:**
+  - `proto/engine/v1/engine.proto` (+ `gen/engine/v1/engine.pb.go`)
+  - `internal/engine/registry.go` (`PairPolicy`, `Subscriber.SymbolPairs`, `SetSymbolPairs`, `WantedPairs` dirombak)
+  - `internal/engine/publisher.go` (`pairsFor` + WARN `pairs.semua.mati`; label denyut `(mati)`)
+  - `internal/grpcserver/server.go` (`kebijakanDari`, isi `SymbolPairs` di `Subscribe` + `StreamEvents`)
+  - `internal/engine/pasangan_test.go`, `internal/grpcserver/symbol_pairs_test.go` (baru)
+- **Verifikasi:** `go build ./...` hijau; `go test ./...` hijau; `engine_grpc.pb.go` **tidak berubah** (service tetap).
+- **Catatan untuk Hermes:**
+  - Branch `hermes` **tidak disentuh** sama sekali.
+  - **JANGAN hapus `pairs = 3`** — itu jalur rollback.
+  - `putuskanTimeframe()`, `slotDue()`, `menungguLTF()`, `latestCandleClose()` **tidak diubah** (sudah benar).
+  - **Urutan deploy wajib: Engine dulu, Runner kemudian.** Kalau kebalik, engine lama mengabaikan `symbol_pairs` diam-diam dan bug tetap ada tanpa gejala.
+
+### [2026-11-11] PERBAIKAN — Empat PR Hermes digabung ke `develop`, scanner & jadwal lilin diselaraskan, engine live di VPS 1
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI — live di VPS 1 pada commit `d99b698`
+- **Ringkasan:**
+  - **PR #1 `fix/ila3-latest-active-fvg` (`c5e01cb`)** — ILA 3.0 hanya memakai FVG aktif terakhir (`GetLatestActiveIRL`) untuk bias HTF dan retracement MTF; pencarian tidak lagi mundur ke FVG usang. Ini membasmi false SELL pada USTEC.
+  - **PR #2 `fix/ila-external-sweep-and-h4-schedule` (`af9ddf2`)** — siklus tutup lilin H4 dan D1 diselaraskan ke New York close (17:00 NY) di `internal/engine/publisher.go`.
+  - **PR #3 `feat/dynamic-symbol-spec-and-risk-gate` (`fbe8649`)** — spesifikasi kontrak broker dibaca dinamis (`SymbolSpec`) plus *max risk assertion gate* yang meng-clamp lot bila melampaui toleransi 1.10x. Ini memperbaiki multiplier US100 Match-Trader (20x) vs cTrader (1x) yang bisa membuat over-risk 20x lipat. CLI scanner ikut diselaraskan agar memakai `b.GetSymbolSpec()` (`2df6ade`).
+  - **PR #4 `fix/ila-wick-sweep-reject-body-break` (`79fa5ec`)** — sweep ditegakkan murni sebagai *rejection wick*: bullish wajib `ck.Close >= cPrev.Low`, bearish wajib `ck.Close <= cPrev.High`, sehingga body yang menembus level ditolak. Presisi desimal di `formatILAVal` kini dinamis (Forex < 50.0 → `%.5f`, emas & indeks → `%.2f`).
+  - **Penyesuaian pasca-merge (`dc82416`)** — `menungguLTF` di `internal/engine/status.go` ditambah `WaitHTFCandleClose`, `WaitILA3MTFReversal`, dan `WaitILA3MTFFVGRetr`, sehingga jadwal evaluasi lilin mengikuti LTF ketika setup masih dalam fase menunggu.
+- **File / Bagian Terdampak:**
+  - `pkg/sequence/evaluator.go`, `pkg/sequence/sequence_test.go`
+  - `internal/engine/publisher.go`, `internal/engine/publisher_test.go`
+  - `pkg/broker/types.go`, `pkg/broker/multi_broker.go`, `pkg/broker/ctrader_broker.go`, `pkg/broker/matchtrader_broker.go`, `pkg/broker/mt5_broker.go`, `pkg/broker/demo_broker.go`, `pkg/risk/calculator.go`
+  - `pkg/ila/evaluator.go`, `pkg/ila/evaluator_test.go`
+  - `internal/engine/status.go`, `internal/engine/status_test.go`
+  - `cmd/scanner/main.go`, `cmd/ila3-scanner/main.go`
+- **Aksi yang diminta:** tidak ada. Semua perubahan sudah di `develop` dan sudah berjalan di VPS 1.
+- **Catatan:** `ila-engine-engine-1` (`:9443`) dan `ila-engine-engine3-1` (`:9444`) berstatus `Up (healthy)` setelah rebuild. Saat entri ini ditulis, working tree lokal `go-trade` sedang diubah agent lain, jadi `go build`/`go test` ulang sengaja tidak dijalankan di sini agar tidak mencampuri pekerjaan tersebut.
+
+---
 
 ### [2026-11-07] PERBAIKAN — Audit ILA 3.0 + Market Gate: Friday gate terlalu awal, label sesi salah, aturan harian hilang, equity fallback berbahaya
 - **Pelaku:** Human + Claude
@@ -242,10 +448,155 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-17] MERGE — Serap `revisi-ila-2` + PR #9 ke branch `hermes` (pkg/ila saja, scanner tetap 100% hermes)
+- **Pelaku:** Hermes
+- **Tipe:** MERGE / PERBAIKAN
+- **Status:** 🟡 SELESAI DI WORKTREE — **belum di-push, belum di-merge ke `hermes` live, belum di-deploy** (menunggu review pemilik)
+
+#### Keputusan yang disetujui pemilik sistem
+| Area | Keputusan |
+|---|---|
+| `cmd/scanner` & `cmd/ila3-scanner` | **Pertahankan 100% versi hermes** — routing dual-broker (XAUUSD → cTrader #10131354, Forex/Indeks → Match-Trader #1089632), risk dinamis 1.0% equity, gate eksekusi defensif. Revisi-ila-2 hanya diambil di `pkg/ila`. |
+| Aturan sweep | **Acuan FVG bergeser** + **CISD wajib berderetan**, TAPI **mitigasi FVG tetap body-close + toleransi wick** seperti hermes. |
+| Deployment | **Belum di-deploy.** Diselesaikan di worktree untuk direview lebih dulu. |
+
+#### Yang diserap dari `revisi-ila-2` (+PR #9)
+1. **`pkg/ila/c2.go` (baru)** — C2 Closure IRL/ERL: acuan bergeser (Urutan 3 & 4), sumber tunggal invalidasi.
+2. **`pkg/ila/erl.go` (baru)** — detektor Key Level ERL 3-candle mandiri (sengaja tidak memakai `pkg/keylevels` milik ILA 3.0 yang berfractal 5-bar).
+3. **`FVG.Invalidated` / `InvalidatedIndex` / `InvalidatedTime`** — invalidasi berbasis **close**, dipisah tegas dari `Mitigated` (wick + toleransi) yang tetap dipakai menyaring kandidat sweep.
+4. **Acuan sweep memakai `referenceAwalIRL`** alih-alih `cPrev.High`; syarat lama "candle k-1 wajib parkir di zona" dihapus sesuai dokumen baku.
+5. **Acuan FVG dipilih dari yang TERMUDA** (`Candle3Index` tertinggi) — dari PR #9.
+6. **Blok cadangan CISD dihapus** (`firstBear`/`firstBull`) — dari PR #9. Inilah akar entry SELL palsu USTEC 9 Okt 2026 (SL 8,7 poin).
+7. **`umurMaksimalFVG = 6`** + **`fvgMasihDijangkauHarga`** (pemindaian mulai `Candle3Index + 1`) + **`cariSweepPadaFVGLebihTua`** — dari PR #9.
+8. **`getFVGTolerance`** disesuaikan agar membedakan **Forex JPY 3-desimal (0.01)** dari forex 5-desimal (0.00010) — tanpa ini `TestFVGTolerancePerInstrumen` gagal untuk USDJPY/GBPJPY.
+9. **`:8080` C2Status/C2Detail/ERLBias** — field informatif, tidak dibaca keputusan entry (pagar `TestSweepC2StatusTidakDibaca`).
+
+#### Yang DIPERTAHANKAN dari `hermes` (diverifikasi utuh)
+- **Mitigasi FVG body-close + toleransi wick** (`evaluator.go:165` & `:212`): `Close > Top` ATAU `High > Top+tol` — bukan wick-only.
+- **Jendela eksekusi dinamis Candle 6** dan **SL dikunci di High/Low Candle 5** saat `isCandle6` (`evaluator.go:1022`, `:1026`).
+- **Scanner dual-broker & risk 1.0%** — file `cmd/*` diambil utuh dari `hermes` (`--ours`).
+- **Origin CISD boleh berawal di Candle 4** dan **2-FVG sweep terlama menang** — test pengunci tetap hijau.
+
+#### Penyesuaian ke sistem kita (bukan konflik logika)
+- **`internal/grpcserver/symbol_pairs_test.go`**: `t.Context()` → `context.Background()`. `t.Context` baru ada di **Go 1.24**, sedangkan server memakai **Go 1.23.6**. Semantik test tidak berubah; diberi komentar alasannya.
+
+#### Verifikasi
+- `go build ./...` **BERSIH**.
+- `go vet ./...` **BERSIH**.
+- `go test ./...` **SELURUH PAKET PASS** (termasuk `pkg/ila`, `pkg/sequence`, dan `internal/grpcserver` yang sebelumnya gagal build).
+- `pkg/ila`: **75 PASS, 0 FAIL** (23 fungsi test; sebagian berjalan sebagai sub-test/varian).
+- Dua kegagalan lama (`internal/grpcserver` build & `pkg/sequence` TestSequenceEvaluation) sudah ditangani/dibuktikan bukan regresi.
+
+#### Catatan penting
+- Branch `hermes` **live TIDAK tersentuh** selama proses ini; semua pekerjaan di worktree terisolasi `/opt/data/cache/scratch/merge_hermes`.
+- Perubahan perilaku yang perlu disadari: syarat "candle acuan parkir di zona" **dihapus permanen** → **lebih banyak setup lolos**. Disarankan bandingkan hasil radar sebelum & sesudah deploy.
+- `DefaultRiskPercent` di `revisi-ila-2` adalah 0.50%; **sengaja TIDAK diambil** — hermes tetap 1.00% sesuai keputusan.
+
 ### [2026-11-10] FITUR & RISK MANAGEMENT — Dynamic Contract Specification Reader & Adaptive Lot Sizing (Multi-Broker Protection)
 - **Pelaku:** Hermes
 - **Tipe:** FITUR / RISK MANAGEMENT
 - **Status:** 🟢 SELESAI
+### [2026-11-16] REVIEW & MERGE — PR #9 (acuan FVG termuda + CISD wajib berderetan) digabung ke `revisi-ila-2`
+- **Pelaku:** Hermes
+- **Tipe:** REVIEW / PERBAIKAN
+- **Status:** 🟢 SELESAI — merge bersih ke `revisi-ila-2`, **belum ke `develop`, belum di-deploy**
+
+#### Ringkasan review atas PR #9
+PR #9 (`fix/ila-fvg-acuan-terminuda-dan-cisd-deretan`, commit `714b38b`) diperiksa menyeluruh lalu digabung ke base aslinya `revisi-ila-2`. **Merge bersih, 0 konflik** (+398 / −28, 4 file).
+
+**Tiga cacat yang diperbaiki — semuanya terverifikasi benar:**
+
+1. **Blok cadangan CISD dihapus** (`firstBear` / `firstBull`). Blok lama menyisir mundur tanpa batas dan bisa memungut candle berlawanan dari Candle 4, lalu memakai candle ekstrem sendiri sebagai penembusnya — melahirkan CISD dari deretan yang tidak pernah ada. Kasus nyata **USTEC 9 Okt 2026 21:00 NY: entry SELL palsu dengan SL 8,7 poin**. Test `TestCISDTidakTerbentukTanpaDeretan` terbukti **MERAH di kode lama** (menghasilkan CISD palsu level `3005.00`) dan hijau setelah diperbaiki.
+2. **Acuan FVG dipilih dari yang TERMUDA** lewat `Candle3Index` tertinggi, bukan `activeFVGs[len-1]`. Versi lama mengambil elemen terakhir daftar, sehingga begitu FVG terbaru termitigasi pilihannya melompat ke FVG aktif **paling tua**. Urutan disengaja: *pilih dulu, baru uji syarat*, supaya FVG termuda yang gagal syarat tidak membuat mesin mundur diam-diam ke FVG lebih tua.
+3. **Pemindaian jarak tidak lagi menghitung candle pembentuk FVG itu sendiri.** Candle 3 secara definisi berada di dalam zonanya, sehingga setiap FVG baru langsung dianggap "dijangkau harga". Pemindaian kini mulai dari `Candle3Index + 1`.
+
+**Dua pagar baru:** `umurMaksimalFVG = 6` (relatif jumlah candle HTF, bukan jam/poin → berlaku sama untuk semua timeframe dan semua pasangan) dan `fvgMasihDijangkauHarga` (uji sentuhan zona, bukan jarak poin → mengikuti skala tiap instrumen). `cariSweepPadaFVGLebihTua` menangani satu keadaan khusus: bila FVG termuda tidak dijangkau harga, acuan diperiksa pada FVG lebih tua **dari yang termuda ke belakang** dan berhenti pada sweep sah pertama — bukan menyisir FVG usang.
+
+**Aturan yang sudah disahkan trader dan SENGAJA tidak diubah (diverifikasi tetap hijau):**
+- Origin CISD boleh berawal di **Candle 4** (dasar kasus 6 Nov dan 11 Nov).
+- SL di **ekstrem M15 Candle 5** saat CISD terbentuk.
+- **Penelusuran maksimal dua FVG + sweep terlama menang** dari `d59e936`. Kasus XAUUSD H4 12 Nov 2026 tetap lolos lewat jalur yang sama.
+
+#### Verifikasi mandiri (dijalankan, bukan dikutip)
+- `go build ./...` pada branch PR: **bersih**.
+- `pkg/ila`: **73 test PASS, 0 FAIL** (baseline `develop` hanya **21**). Empat test baru PR #9 PASS semua.
+- Dua kegagalan di luar `pkg/ila` **BUKAN regresi PR ini** — dibuktikan dengan menjalankan `develop` murni di worktree terpisah, gagal **identik**:
+  - `internal/grpcserver` — `symbol_pairs_test.go:78: t.Context undefined`. `t.Context` butuh **Go 1.24**, VPS memakai **Go 1.23.6**. Utang teknis terpisah.
+  - `pkg/sequence` — `TestSequenceEvaluation` gagal (`expected BEARISH bias ... got NEUTRAL`). Cacat lama di `develop`.
+
+#### Catatan penting untuk penggabungan berikutnya
+- **PR #9 TIDAK bisa diterapkan ke branch `hermes`.** Prasyaratnya (`pkg/ila/c2.go`, `pkg/ila/erl.go`, `FVG.Invalidated`, `referenceAwalIRL`, `detectSweepPadaFVG`) **belum ada** di `hermes`; `revisi-ila-2` juga bukan ancestor `hermes`. Simulasi merge ke `hermes` menghasilkan **24 titik konflik di `pkg/ila/evaluator.go`** dan 8 di `evaluator_test.go` — dan itu konflik **arsitektural**, bukan kosmetik: `hermes` masih memakai syarat "candle acuan harus parkir di zona" (`k-1 == Candle3Index && !isDoubleFVG → tolak`), sedangkan `revisi-ila-2` **menghapusnya permanen** dan memakai acuan bergeser (Urutan 4).
+- **Urutan penggabungan yang disarankan:** PR #9 → `revisi-ila-2` (**selesai**) → `develop` → `hermes` (rekonsiliasi sekali) → backtest banding entry lama vs baru → baru deploy. `hermes` sudah divergen 23 commit dari `develop` (routing dual-broker, gate eksekusi), sehingga menempelkan PR #9 langsung ke `hermes` akan **menduplikasi logika sweep** dengan dua aturan berbeda.
+- Dua test lama diubah atas keputusan pemilik (opsi A): `TestFakeSweepCandle3Rejected` → `TestSweepLangsungSetelahCandle3Diterima`. Konsekuensinya **lebih banyak setup lolos**. Perlu diperhatikan saat backtest.
+- `C2Status` / `C2Detail` / `ERLBias` masih **informatif** — belum memicu dan belum memfilter entry. Pagar anti-regresi `TestSweepC2StatusTidakDibaca` sudah ada.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (merge +398/−28)
+- `pkg/ila/cisd_deretan_test.go` (baru, 98 baris)
+- `pkg/ila/fvg_acuan_test.go` (baru, 91 baris)
+
+### [2026-11-12] REVIEW — Double FVG & DOL Breached digabung dengan koreksi pengaman
+- **Pelaku:** Claude
+- **Tipe:** REVIEW / PERBAIKAN
+- **Status:** 🟢 SELESAI — digabung ke `develop`
+- **Ringkasan review atas entri Hermes [2026-11-12]:**
+  - **Klaim "TP dikunci 1:2.00 saat DOL breached" — TERVERIFIKASI.** Blok `dolBreached` di `EvaluateILA` memang menghitung ulang `TakeProfit = Entry ± (2.00 × slDist)`, jadi menghapus guard `candles[post].Low <= ssl` tidak menghasilkan R:R negatif.
+  - **Koreksi 1 — syarat Double FVG dipersempit.** Deteksi awal membandingkan `activeFVGs[len-2]`, padahal daftar itu sudah terfilter `!Mitigated`, sehingga FVG sebelumnya yang termitigasi terlewat dan pembanding bisa melompat ke FVG yang jauh lebih tua. Pembanding kini memakai `fvgs` kronologis (helper `indexOfFVG`) dengan syarat ketat: tipe sama, FVG sebelumnya **masih aktif**, dan pembentuk benar-benar bersambung (`Candle1Index == prev.Candle3Index` atau jarak Candle2 tepat 1).
+  - **Koreksi 2 — TP fase `WAIT_LTF_CISD` ikut di-clamp.** Clamping 1:2.00 sebelumnya hanya berjalan di jalur `READY_TO_ENTRY`. Di fase WAIT, `TakeProfit = sweep.TargetDOL` mentah; setelah guard DOL dihapus, panel bisa menampilkan TP yang sudah terlewati. Sekarang TP fase WAIT ikut dikunci 1:2.00 diukur dari close Candle 4.
+  - **Pengujian yang sebelumnya tidak ada.** PR asli tidak membawa satu pun test. Ditambahkan: `TestDoubleFVGAllowsCandle3Sweep`, `TestDoubleFVGWithMitigatedNeighbourRejected`, `TestSingleFVGStillRejectsCandle3Sweep`, `TestDOLBreachedDoesNotInvalidateSweep`. Semuanya sudah diverifikasi **gagal** bila fitur/koreksi dicabut, jadi benar-benar menjaga perilaku.
+  - **Verifikasi akhir:** `go build ./...`, `go vet ./...`, dan `go test ./...` seluruh paket PASS.
+- **File / Bagian Terdampak:**
+  - `pkg/ila/evaluator.go`
+  - `pkg/ila/evaluator_test.go`
+- **Catatan:** Branch `hermes` (bukan `fix/ila-double-fvg-and-dol-breached`) **tidak disentuh** — itu wilayah kerja Hermes.
+
+### [2026-11-12] PERBAIKAN — Dukungan Dinamis Double/Stacked FVG & Penyelarasan DOL Breached
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Dukungan Double / Stacked FVG (`pkg/ila/evaluator.go`):**
+   - Menambahkan deteksi formasi FVG beruntun (*consecutive displacement* pada arah yang sama).
+   - Pada kondisi Double FVG, batas pembentuk FVG kedua (Candle 3) sah disapu oleh lilin berikutnya saat harga melakukan retrace masuk ke area FVG lilin sebelumnya. Blokir kaku `k-1 <= Candle3Index` dilonggarkan secara dinamis hanya untuk kasus Double FVG.
+   - Contoh kasus: XAUUSD H4 lilin 18:00 NY menyapu ekor lilin 14:00 NY (Candle 3 FVG kedua) di dalam rentang FVG 10:00 NY (3990.99 – 4010.86), mengonfirmasi setup Bearish ILA 2.0 yang presisi.
+2. **Penyelarasan Aturan DOL Breached:**
+   - Memperbaiki validasi pembatalan (*invalidation*) sweep: penembusan level SSL/BSL sebelum entry tidak lagi membatalkan siklus sweep. Sesuai aturan baku ILA (Skenario 3), kondisi DOL Breached tetap sah dengan target Take Profit otomatis dikunci ke batas dasar 1:2.00 R:R.
+3. **Verifikasi:**
+   - `go test -count=1 ./pkg/ila/...` PASS 100%.
+
+### [2026-11-11] PERBAIKAN — Penegakan Aturan Baku Wick Sweep vs Body Break & Presisi Desimal Forex
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+1. **Penegakan Rejection Wick (Anti Body Break):**
+   - Di `DetectHTFIlaSweep` (`pkg/ila/evaluator.go`), sweep lilin HTF kini wajib berupa sapuan sumbu (*wick rejection*) murni.
+   - Untuk Bullish sweep (mencari BUY): ditambahkan validasi wajib `ck.Close >= cPrev.Low`. Jika body lilin ditutup menembus ke bawah Low acuan (`ck.Close < cPrev.Low`), lilin dinyatakan sebagai **Body Breakdown** dan seketika ditolak sebagai sweep.
+   - Untuk Bearish sweep (mencari SELL): ditambahkan validasi wajib `ck.Close <= cPrev.High`. Jika body lilin ditutup menembus ke atas High acuan (`ck.Close > cPrev.High`), lilin dinyatakan sebagai **Body Breakout** dan seketika ditolak sebagai sweep.
+   - Kasus riil: Mencegah lilin H1 EURUSD 00:00 NY (Close 1.11604 < cPrev.Low 1.11620) terdeteksi secara keliru sebagai Bullish Sweep di tengah tren penurunan besar.
+2. **Presisi Desimal Dinamis (`formatILAVal`):**
+   - Menghilangkan hardcoded format `%.2f` di `evaluator.go` yang menyebabkan harga pair Forex tercetak bulat rancu seperti `(1.12 - 1.12)` pada alert Telegram.
+   - Pair dengan nilai < 50.0 (Forex) secara otomatis menggunakan presisi 5 desimal (`%.5f`), sedangkan Emas dan Indeks tetap menggunakan 2 desimal (`%.2f`).
+3. **Pengujian Unit Test:**
+   - Ditambahkan `TestBodyBreakoutRejectedAsSweep` di `pkg/ila/evaluator_test.go` untuk mengunci dan memvalidasi penolakan lilin body breakdown/breakout sebagai sweep.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go`
+- `pkg/ila/evaluator_test.go`
+- `docs/AGENT_LOG.md`
+
+#### Verifikasi
+- `go test -v ./pkg/ila/...` PASS 100% (termasuk test baru `TestBodyBreakoutRejectedAsSweep`).
+- Verifikasi CLI live `EURUSD H1 -> M5`: bias arah kembali selaras 100% BEARISH SELL bersama H4 -> M15.
+
+---
+
+### [2026-11-10] FITUR & RISK MANAGEMENT — Dynamic Contract Specification Reader & Adaptive Lot Sizing (Multi-Broker Protection)
+- **Pelaku:** Hermes
+- **Tipe:** FITUR / RISK MANAGEMENT
+- **Status:** 🟢 SELESAI (Diajukan via PR #3)
 - **Ringkasan:**
   - **Akar Masalah (Insiden US100 Match-Trader 1.60 Lot):**
     - Di Match-Trader (#1089632), instrumen indeks `US100` berbasis kontrak CME E-mini futures dengan `multiplier: 20` ($20 per 1.00 poin indeks per lot).
@@ -382,6 +733,51 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
     - `pkg/quarterly/cycle.go`: Standarisasi konversi waktu New York Time (`America/New_York`) untuk kuartal Q1-Q4.
   - Seluruh unit test PASS 100%. Rebuild ke-6 binary standalone (`ila-cli`, `ila-scanner`, `ila-server`, `ila3-cli`, `ila3-scanner`, `ila3-server`).
   - Server daemon 8080 & 8082 di-restart dan merespons normal.
+### [2026-11-10] PERBAIKAN — Penyelarasan Penjadwalan Penutupan Lilin H4 & D1 ke New York Close (Engine Publisher)
+- **Pelaku:** Hermes
+- **Tipe:** PERBAIKAN / ENGINE SCHEDULER
+- **Status:** 🟢 SELESAI (Diajukan via PR #2)
+- **Ringkasan:**
+  - **Akar Masalah:**
+    Fungsi `latestCandleClose` pada `internal/engine/publisher.go` sebelumnya menggunakan formula `(t.Hour()/4)*4` UTC murni (berasumsi lilin H4 tutup pada jam genap 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC). Padahal di pasar forex/CFD dan TradingView, penutupan lilin H4 berpatokan pada **New York Close (17:00 NY = 01:00, 05:00, 09:00, 13:00, 17:00, 21:00 NY, atau 02:00, 06:00, 10:00, 14:00, 18:00, 22:00 UTC)**.
+    Akibatnya, pada momen lilin H4 jam 06:00 UTC (01:00 NY) resmi tutup, scheduler mengira lilin tutup jam 04:00 UTC sehingga evaluasi tertunda 2 jam (delay) dan melewatkan momen validasi HTF.
+  - **Solusi:**
+    Formula `latestCandleClose` diselaraskan dengan zona waktu New York (`America/New_York`) mengikuti siklus 4-jam New York Close, serta D1 pada jam 17:00 NY, konsisten dengan standarisasi waktu di commit `d54937c`.
+  - **Pengujian:**
+    Memperbarui `internal/engine/publisher_test.go` untuk memverifikasi penutupan H4 jam 14:00:04 UTC (09:00 NY) (PASS 100%).
+
+---
+
+### [2026-11-10] PERBAIKAN — Hapus mode demo, hapus Yahoo, status ILA 3.0 diteruskan
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI
+
+#### Ringkasan
+
+1. **Mode demo dihapus.** Flag `-demo`, `UjiEvaluator`, `DemoResult`, dan
+   `Publisher.AbaikanJamPasar` dihapus. Injeksi sinyal tiruan tidak lagi punya
+   jalur di binary engine, sesuai RUNBOOK "jangan memalsukan sinyal".
+2. **Yahoo Finance dihapus dari rantai feed.** Forex, logam, dan indeks hanya
+   dari TradingView FOREX.com; Binance hanya untuk instrumen kripto. Provider
+   tidak lagi jatuh ke instrumen lain (mis. emas ke PAXG) karena candle dari
+   instrumen lain menghasilkan setup yang tampak sah dengan harga yang salah.
+3. **Resolusi timeframe tak dikenal kini ditolak**, bukan diam-diam memakai 15
+   menit seperti sebelumnya.
+4. **Status ILA 3.0 diteruskan.** `WAIT_ILA3_*`, `ILA3_EXPANSION_*`, dan
+   `ILA3_TARGET_REACHED` dipetakan ke enum proto. Sebelumnya semuanya menjadi
+   `SIGNAL_STATUS_UNSPECIFIED` sehingga Runner membuangnya tanpa jejak.
+5. **TTL mengikuti LTF sebenarnya.** `5m/15m/1H/4H/D/W` kini dikenali, jadi
+   sinyal `W|1H` tidak lagi kedaluwarsa dalam 15 menit.
+
+#### Verifikasi
+
+- `go build ./...` dan `go vet ./...` lolos.
+- Test unit baru: `internal/engine/status_test.go`,
+  `internal/signal/signal_test.go`, `internal/grpcserver/status_test.go`,
+  `pkg/marketfeed/mapping_test.go`.
+- `TestBinanceProvider` pada `pkg/marketfeed/binance_test.go` adalah test
+  jaringan; gagal hanya bila lingkungan tidak dapat menjangkau Binance.
 
 ---
 
@@ -1041,8 +1437,10 @@ Selain itu, status menunggu kini hanya dikirim ke pelanggan yang meminta
 - **Cara menjalankan:**
   ```bash
   go run ./cmd/engine -addr :9090 -strategy ila-2.0 -symbols XAUUSD
-  go run ./cmd/engine -addr :9090 -demo   # evaluator tiruan, untuk uji alur
   ```
+  Mode demo (`-demo`) sudah dihapus. Sinyal tiruan tidak boleh disuntikkan ke
+  engine produksi; uji alur sinyal dilakukan lewat Runner dengan data pasar
+  nyata.
 
 ### [2026-11-07] PERBAIKAN MARKET GATE — Tambah Proteksi Friday Market Close (Jumat >= 20:00 UTC / 03:00 WIB)
 - **Pelaku:** Hermes

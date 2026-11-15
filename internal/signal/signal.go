@@ -8,7 +8,10 @@
 // bisa memakainya apa adanya.
 package signal
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Status adalah status sinyal pada kontrak keluar.
 type Status string
@@ -26,6 +29,20 @@ const (
 	// yang sudah terbit harus ditarik. Tidak pernah dikirim ke Runner sebagai
 	// status sinyal, melainkan sebagai aksi CANCEL.
 	Invalidated Status = "INVALIDATED"
+
+	// Status ILA 3.0. Namanya sengaja sama dengan enum di proto agar tidak ada
+	// penerjemahan tambahan di Runner. Semuanya hanya untuk tampilan kemajuan;
+	// satu-satunya status yang boleh dieksekusi tetap Ready (READY_ENTRY_1 dan
+	// READY_ENTRY_2 milik ILA 3.0 dipetakan ke Ready karena keduanya adalah
+	// titik entry yang sah).
+	WaitILA3HTFKeyLevel  Status = "WAIT_ILA3_HTF_KEY_LEVEL"
+	WaitILA3MTFReversal  Status = "WAIT_ILA3_MTF_REVERSAL"
+	WaitILA3LTFCISD1     Status = "WAIT_ILA3_LTF_CISD_1"
+	ILA3Expansion1Active Status = "ILA3_EXPANSION_1_ACTIVE"
+	WaitILA3MTFFVGRetr   Status = "WAIT_ILA3_MTF_FVG_RETR"
+	WaitILA3LTFCISD2     Status = "WAIT_ILA3_LTF_CISD_2"
+	ILA3Expansion2Active Status = "ILA3_EXPANSION_2_ACTIVE"
+	ILA3TargetReached    Status = "ILA3_TARGET_REACHED"
 )
 
 // Action adalah jenis perubahan yang dikirim ke Runner.
@@ -38,24 +55,33 @@ const (
 	ActionSupersede Action = "SUPERSEDE"
 )
 
-// ttlByLTF: satu candle LTF (plans/04 §6). Bila entry tidak terjadi dalam satu
-// candle LTF, setup sudah tidak relevan.
-var ttlByLTF = map[string]time.Duration{
-	"H4":  4 * time.Hour,
-	"H1":  time.Hour,
-	"M15": 15 * time.Minute,
-	"M5":  5 * time.Minute,
-}
-
 // TTLUntuk mengembalikan masa berlaku satu sinyal.
+//
+// Satu candle LTF (plans/04 §6): bila entry tidak terjadi dalam satu candle
+// LTF, setup sudah tidak relevan. Penulisan timeframe dinormalkan karena ILA
+// 2.0 memakai bentuk H4/M15 sedangkan ILA 3.0 memakai 4H/15m.
 //
 // Nilai tak dikenal memakai 15 menit: lebih baik sinyal mati cepat daripada
 // hidup terlalu lama lalu dieksekusi pada harga yang sudah jauh.
 func TTLUntuk(ltf string) time.Duration {
-	if d, ok := ttlByLTF[ltf]; ok {
-		return d
+	switch strings.ToUpper(strings.TrimSpace(ltf)) {
+	case "M5", "5M":
+		return 5 * time.Minute
+	case "M15", "15M":
+		return 15 * time.Minute
+	case "M30", "30M":
+		return 30 * time.Minute
+	case "H1", "1H":
+		return time.Hour
+	case "H4", "4H":
+		return 4 * time.Hour
+	case "D", "D1", "1D":
+		return 24 * time.Hour
+	case "W", "W1", "1W":
+		return 7 * 24 * time.Hour
+	default:
+		return 15 * time.Minute
 	}
-	return 15 * time.Minute
 }
 
 // Signal adalah sinyal yang sedang dipegang engine.

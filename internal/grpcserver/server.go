@@ -7,6 +7,7 @@ package grpcserver
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,16 +69,22 @@ func (s *Server) Subscribe(ctx context.Context, req *enginev1.SubscribeRequest) 
 	}
 
 	symbols := sanitize(req.GetSymbols())
+	pairs := pasanganDari(req.GetPairs())
 	s.reg.Add(engine.Subscriber{
-		ID:         req.GetSubscriberId(),
-		Symbols:    toSet(symbols),
-		WantStatus: req.GetWantStatusUpdates(),
-		Send:       s.senderFor(req.GetSubscriberId()),
+		ID:          req.GetSubscriberId(),
+		Symbols:     toSet(symbols),
+		Pairs:       pairs,
+		SymbolPairs: kebijakanDari(req.GetSymbolPairs()),
+		SymbolFeeds: req.GetSymbolFeeds(),
+		WantStatus:  req.GetWantStatusUpdates(),
+		Send:        s.senderFor(req.GetSubscriberId()),
 	})
 
 	log.Info("pelanggan berlangganan",
 		"evt", "subscribe.ok",
-		"subscriber", req.GetSubscriberId(), "symbols", symbols)
+		"subscriber", req.GetSubscriberId(), "symbols", symbols,
+		"pairs", len(pairs), "feeds", len(req.GetSymbolFeeds()),
+		"symbol_pairs", len(req.GetSymbolPairs()))
 
 	return &enginev1.SubscribeResponse{
 		Ok:              true,
@@ -125,7 +132,9 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 	symbols := sanitize(req.GetSymbols())
 	s.reg.Add(engine.Subscriber{
 		ID: id, Symbols: toSet(symbols),
-		WantStatus: req.GetWantStatusUpdates(), Send: s.senderFor(id),
+		SymbolPairs: kebijakanDari(req.GetSymbolPairs()),
+		SymbolFeeds: req.GetSymbolFeeds(),
+		WantStatus:  req.GetWantStatusUpdates(), Send: s.senderFor(id),
 	})
 
 	defer func() {
@@ -146,10 +155,27 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 		}
 	}
 
+	hbTicker := time.NewTicker(30 * time.Second)
+	defer hbTicker.Stop()
+
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
+		case <-hbTicker.C:
+			now := time.Now().UTC()
+			hb := &enginev1.EngineEvent{
+				Payload: &enginev1.EngineEvent_Heartbeat{
+					Heartbeat: &enginev1.Heartbeat{
+						EngineVersion: s.version.Engine,
+						At:            timestamppb.New(now),
+						ActiveSignals: int32(s.pub.ActiveCount()),
+					},
+				},
+			}
+			if err := stream.Send(hb); err != nil {
+				return err
+			}
 		case ev, ok := <-ch:
 			if !ok {
 				return nil
@@ -236,6 +262,56 @@ func sanitize(items []string) []string {
 	return out
 }
 
+// pasanganDari menerjemahkan pasangan timeframe dari kontrak ke bentuk internal.
+//
+// Pasangan yang tidak lengkap dibuang: HTF atau LTF kosong hanya akan gagal
+// dievaluasi dan membanjiri log dengan galat yang sama tiap menit. Daftar
+// kosong dipertahankan sebagai "semua pasangan" sesuai arti di Registry.
+func pasanganDari(in []*enginev1.Pair) []engine.Pair {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]engine.Pair, 0, len(in))
+	for _, p := range in {
+		htf := strings.TrimSpace(p.GetHtf())
+		ltf := strings.TrimSpace(p.GetLtf())
+		if htf == "" || ltf == "" {
+			continue
+		}
+		out = append(out, engine.Pair{HTF: htf, LTF: ltf})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// kebijakanDari mengubah peta kebijakan per simbol dari kontrak gRPC menjadi
+// bentuk yang dipakai Registry.
+//
+// Simbol dengan daftar kosong TETAP dimasukkan bila restricted=true: artinya
+// seluruh pasangannya sengaja dimatikan, dan engine harus tahu itu.
+func kebijakanDari(in map[string]*enginev1.SymbolPairs) map[string]engine.PairPolicy {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]engine.PairPolicy, len(in))
+	for symbol, pairSet := range in {
+		symbol = strings.TrimSpace(symbol)
+		if symbol == "" {
+			continue
+		}
+		out[symbol] = engine.PairPolicy{
+			Pairs:      pasanganDari(pairSet.GetPairs()),
+			Restricted: pairSet.GetRestricted(),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func statusOf(s signal.Status) enginev1.SignalStatus {
 	switch s {
 	case signal.Ready:
@@ -248,6 +324,22 @@ func statusOf(s signal.Status) enginev1.SignalStatus {
 		return enginev1.SignalStatus_WAIT_LTF_CISD
 	case signal.Invalidated:
 		return enginev1.SignalStatus_INVALIDATED
+	case signal.WaitILA3HTFKeyLevel:
+		return enginev1.SignalStatus_WAIT_ILA3_HTF_KEY_LEVEL
+	case signal.WaitILA3MTFReversal:
+		return enginev1.SignalStatus_WAIT_ILA3_MTF_REVERSAL
+	case signal.WaitILA3LTFCISD1:
+		return enginev1.SignalStatus_WAIT_ILA3_LTF_CISD_1
+	case signal.ILA3Expansion1Active:
+		return enginev1.SignalStatus_ILA3_EXPANSION_1_ACTIVE
+	case signal.WaitILA3MTFFVGRetr:
+		return enginev1.SignalStatus_WAIT_ILA3_MTF_FVG_RETR
+	case signal.WaitILA3LTFCISD2:
+		return enginev1.SignalStatus_WAIT_ILA3_LTF_CISD_2
+	case signal.ILA3Expansion2Active:
+		return enginev1.SignalStatus_ILA3_EXPANSION_2_ACTIVE
+	case signal.ILA3TargetReached:
+		return enginev1.SignalStatus_ILA3_TARGET_REACHED
 	default:
 		return enginev1.SignalStatus_SIGNAL_STATUS_UNSPECIFIED
 	}
