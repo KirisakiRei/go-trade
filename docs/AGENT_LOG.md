@@ -448,6 +448,45 @@ go test ./pkg/risk/... ./pkg/ila/... ./pkg/indicators/...   # harus PASS
 
 ## ⬆️ DARI HERMES KE HUMAN
 
+### [2026-11-16] REVIEW & MERGE — PR #9 (acuan FVG termuda + CISD wajib berderetan) digabung ke `revisi-ila-2`
+- **Pelaku:** Hermes
+- **Tipe:** REVIEW / PERBAIKAN
+- **Status:** 🟢 SELESAI — merge bersih ke `revisi-ila-2`, **belum ke `develop`, belum di-deploy**
+
+#### Ringkasan review atas PR #9
+PR #9 (`fix/ila-fvg-acuan-terminuda-dan-cisd-deretan`, commit `714b38b`) diperiksa menyeluruh lalu digabung ke base aslinya `revisi-ila-2`. **Merge bersih, 0 konflik** (+398 / −28, 4 file).
+
+**Tiga cacat yang diperbaiki — semuanya terverifikasi benar:**
+
+1. **Blok cadangan CISD dihapus** (`firstBear` / `firstBull`). Blok lama menyisir mundur tanpa batas dan bisa memungut candle berlawanan dari Candle 4, lalu memakai candle ekstrem sendiri sebagai penembusnya — melahirkan CISD dari deretan yang tidak pernah ada. Kasus nyata **USTEC 9 Okt 2026 21:00 NY: entry SELL palsu dengan SL 8,7 poin**. Test `TestCISDTidakTerbentukTanpaDeretan` terbukti **MERAH di kode lama** (menghasilkan CISD palsu level `3005.00`) dan hijau setelah diperbaiki.
+2. **Acuan FVG dipilih dari yang TERMUDA** lewat `Candle3Index` tertinggi, bukan `activeFVGs[len-1]`. Versi lama mengambil elemen terakhir daftar, sehingga begitu FVG terbaru termitigasi pilihannya melompat ke FVG aktif **paling tua**. Urutan disengaja: *pilih dulu, baru uji syarat*, supaya FVG termuda yang gagal syarat tidak membuat mesin mundur diam-diam ke FVG lebih tua.
+3. **Pemindaian jarak tidak lagi menghitung candle pembentuk FVG itu sendiri.** Candle 3 secara definisi berada di dalam zonanya, sehingga setiap FVG baru langsung dianggap "dijangkau harga". Pemindaian kini mulai dari `Candle3Index + 1`.
+
+**Dua pagar baru:** `umurMaksimalFVG = 6` (relatif jumlah candle HTF, bukan jam/poin → berlaku sama untuk semua timeframe dan semua pasangan) dan `fvgMasihDijangkauHarga` (uji sentuhan zona, bukan jarak poin → mengikuti skala tiap instrumen). `cariSweepPadaFVGLebihTua` menangani satu keadaan khusus: bila FVG termuda tidak dijangkau harga, acuan diperiksa pada FVG lebih tua **dari yang termuda ke belakang** dan berhenti pada sweep sah pertama — bukan menyisir FVG usang.
+
+**Aturan yang sudah disahkan trader dan SENGAJA tidak diubah (diverifikasi tetap hijau):**
+- Origin CISD boleh berawal di **Candle 4** (dasar kasus 6 Nov dan 11 Nov).
+- SL di **ekstrem M15 Candle 5** saat CISD terbentuk.
+- **Penelusuran maksimal dua FVG + sweep terlama menang** dari `d59e936`. Kasus XAUUSD H4 12 Nov 2026 tetap lolos lewat jalur yang sama.
+
+#### Verifikasi mandiri (dijalankan, bukan dikutip)
+- `go build ./...` pada branch PR: **bersih**.
+- `pkg/ila`: **73 test PASS, 0 FAIL** (baseline `develop` hanya **21**). Empat test baru PR #9 PASS semua.
+- Dua kegagalan di luar `pkg/ila` **BUKAN regresi PR ini** — dibuktikan dengan menjalankan `develop` murni di worktree terpisah, gagal **identik**:
+  - `internal/grpcserver` — `symbol_pairs_test.go:78: t.Context undefined`. `t.Context` butuh **Go 1.24**, VPS memakai **Go 1.23.6**. Utang teknis terpisah.
+  - `pkg/sequence` — `TestSequenceEvaluation` gagal (`expected BEARISH bias ... got NEUTRAL`). Cacat lama di `develop`.
+
+#### Catatan penting untuk penggabungan berikutnya
+- **PR #9 TIDAK bisa diterapkan ke branch `hermes`.** Prasyaratnya (`pkg/ila/c2.go`, `pkg/ila/erl.go`, `FVG.Invalidated`, `referenceAwalIRL`, `detectSweepPadaFVG`) **belum ada** di `hermes`; `revisi-ila-2` juga bukan ancestor `hermes`. Simulasi merge ke `hermes` menghasilkan **24 titik konflik di `pkg/ila/evaluator.go`** dan 8 di `evaluator_test.go` — dan itu konflik **arsitektural**, bukan kosmetik: `hermes` masih memakai syarat "candle acuan harus parkir di zona" (`k-1 == Candle3Index && !isDoubleFVG → tolak`), sedangkan `revisi-ila-2` **menghapusnya permanen** dan memakai acuan bergeser (Urutan 4).
+- **Urutan penggabungan yang disarankan:** PR #9 → `revisi-ila-2` (**selesai**) → `develop` → `hermes` (rekonsiliasi sekali) → backtest banding entry lama vs baru → baru deploy. `hermes` sudah divergen 23 commit dari `develop` (routing dual-broker, gate eksekusi), sehingga menempelkan PR #9 langsung ke `hermes` akan **menduplikasi logika sweep** dengan dua aturan berbeda.
+- Dua test lama diubah atas keputusan pemilik (opsi A): `TestFakeSweepCandle3Rejected` → `TestSweepLangsungSetelahCandle3Diterima`. Konsekuensinya **lebih banyak setup lolos**. Perlu diperhatikan saat backtest.
+- `C2Status` / `C2Detail` / `ERLBias` masih **informatif** — belum memicu dan belum memfilter entry. Pagar anti-regresi `TestSweepC2StatusTidakDibaca` sudah ada.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (merge +398/−28)
+- `pkg/ila/cisd_deretan_test.go` (baru, 98 baris)
+- `pkg/ila/fvg_acuan_test.go` (baru, 91 baris)
+
 ### [2026-11-12] REVIEW — Double FVG & DOL Breached digabung dengan koreksi pengaman
 - **Pelaku:** Claude
 - **Tipe:** REVIEW / PERBAIKAN
