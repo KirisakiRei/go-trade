@@ -149,15 +149,18 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 	}()
 
 	// Kirim status pasar lebih dulu agar Runner tidak salah menahan sinyal.
-	if s.market != nil {
-		if err := stream.Send(marketEvent(s.market())); err != nil {
-			return err
+	kirmStatusPasar := func() error {
+		if s.market == nil {
+			return nil
 		}
+		return stream.Send(marketEvent(s.market()))
+	}
+	if err := kirmStatusPasar(); err != nil {
+		return err
 	}
 
 	hbTicker := time.NewTicker(30 * time.Second)
 	defer hbTicker.Stop()
-
 	for {
 		select {
 		case <-stream.Context().Done():
@@ -174,6 +177,18 @@ func (s *Server) StreamEvents(req *enginev1.SubscribeRequest, stream enginev1.En
 				},
 			}
 			if err := stream.Send(hb); err != nil {
+				return err
+			}
+			// Status pasar WAJIB ikut setiap denyut, bukan hanya sekali di awal.
+			//
+			// Tanpa ini Runner memegang status dari saat koneksi dibuka saja.
+			// Koneksi yang bertahan berhari-hari membuat statusnya beku, dan
+			// Runner menahan semua sinyal dengan alasan "Pasar sedang tutup"
+			// padahal pasar sudah buka -- kasus nyata 16 Nov 2026: Runner
+			// memegang CLOSED dari snapshot Sabtu 14 Nov.
+			//
+			// Menumpang pada denyut yang sudah ada menghindari ticker baru.
+			if err := kirmStatusPasar(); err != nil {
 				return err
 			}
 		case ev, ok := <-ch:
