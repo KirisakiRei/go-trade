@@ -69,6 +69,57 @@ func getFVGTolerance(price float64) float64 {
 	}
 }
 
+// umurMaksimalFVG adalah batas umur sebuah FVG, dihitung dalam candle HTF sejak
+// Candle 3 pembentuknya sampai candle terakhir yang dievaluasi.
+//
+// FVG hanya berguna selama harga masih berurusan dengan zonanya. Semua FVG yang
+// dipertimbangkan memang belum termitigasi, tetapi bisa saja harga sudah
+// meninggalkannya jauh dan tidak pernah kembali. FVG seperti itu tetap "hidup"
+// secara teknis, lalu dipakai sebagai acuan dan melahirkan entry dari struktur
+// berhari-hari lalu.
+//
+// Enam candle dipilih dari pengukuran pada feed asli, bukan tebakan. Batas empat
+// sempat dicoba dan membuang setup sah (EURUSD 12 Nov 2026 09:45 NY, FVG acuan
+// baru berumur lima candle, entry SELL-nya berakhir TP). Mengukur dalam jumlah
+// candle, bukan jam atau poin, membuat batas ini berlaku sama untuk semua
+// timeframe dan semua pasangan tanpa angka khusus per simbol.
+const umurMaksimalFVG = 6
+
+// fvgMasihDijangkauHarga menjawab apakah harga masih berurusan dengan zona FVG.
+//
+// Ini syarat yang sama dengan definisi sweep itu sendiri: sebuah candle hanya
+// bisa menyapu likuiditas di dalam FVG bila ia benar-benar masuk ke zona itu.
+// Menguji sentuhan terhadap batas zona, bukan jarak poin, membuat syarat ini
+// otomatis mengikuti skala tiap instrumen.
+func fvgMasihDijangkauHarga(fvg FVG, candles []indicators.Candle) bool {
+	tol := getFVGTolerance(fvg.Top)
+
+	// Mulai dari candle SETELAH Candle 3, bukan dari Candle 3 itu sendiri.
+	//
+	// Candle 3 pembentuk FVG secara definisi berada di dalam zonanya (High-nya
+	// adalah batas bawah FVG bearish, Low-nya batas atas FVG bullish). Menghitung
+	// candle itu membuat setiap FVG yang baru lahir langsung dianggap "dijangkau
+	// harga" tanpa satu pun candle setelahnya yang benar-benar menyentuh zona.
+	for i := fvg.Candle3Index + 1; i < len(candles); i++ {
+		c := candles[i]
+		if fvg.Type == FVGBearish {
+			// FVG bearish (SIBI) berada DI BAWAH candle displacement. Harga baru
+			// bisa menyapu likuiditas di zona ini setelah naik masuk ke dalamnya,
+			// yaitu saat High menembus batas bawah zona.
+			if c.High >= fvg.Bottom-tol {
+				return true
+			}
+			continue
+		}
+		// FVG bullish (BISI) berada DI ATAS candle displacement; harga
+		// menyentuhnya saat turun menembus batas atas zona.
+		if c.Low <= fvg.Top+tol {
+			return true
+		}
+	}
+	return false
+}
+
 // FindFVGs scans candle history and returns all 3-candle Fair Value Gaps.
 func (e *Evaluator) FindFVGs(candles []indicators.Candle) []FVG {
 	n := len(candles)
@@ -215,8 +266,49 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		return nil // Tidak ada FVG aktif yang valid (semua sudah termitigasi)
 	}
 
-	// Kunci murni pada FVG aktif TERBARU
-	latestFVG := activeFVGs[len(activeFVGs)-1]
+	// Kunci pada FVG aktif TERBARU, yaitu yang candle pembentuknya paling akhir.
+	//
+	// Urutan daftar sudah kronologis, tetapi memilih "elemen terakhir" saja salah:
+	// begitu FVG terbaru termitigasi, pilihannya melompat ke FVG aktif paling tua
+	// yang masih tersisa. Yang dicari selalu yang paling muda.
+	//
+	// URUTAN INI DISENGAJA: pilih dulu, baru diuji syaratnya.
+	//
+	// Versi sebelumnya menyaring dulu (umur dan jarak) lalu memilih yang termuda
+	// dari yang lolos. Akibatnya, bila FVG termuda gagal syarat, mesin diam-diam
+	// mundur ke FVG yang lebih tua dan tetap membuka entry -- persis perilaku
+	// "mengeksekusi FVG jadul" yang sedang dibereskan. Manusia membaca chart dari
+	// struktur terakhir; bila struktur terakhir belum memenuhi syarat, jawabannya
+	// adalah menunggu, bukan menggali struktur sebelumnya.
+	latestFVG := activeFVGs[0]
+	for _, f := range activeFVGs[1:] {
+		if f.Candle3Index > latestFVG.Candle3Index {
+			latestFVG = f
+		}
+	}
+
+	// Batas umur FVG. Dihitung relatif (jumlah candle), jadi berlaku sama untuk
+	// semua timeframe dan semua pasangan.
+	idxTerakhir := n - 1
+	if idxTerakhir-latestFVG.Candle3Index > umurMaksimalFVG {
+		return nil // FVG termuda sudah terlalu tua; tidak mundur ke yang lebih tua
+	}
+
+	// FVG yang harga sudah lama meninggalkan zonanya bukan acuan yang jujur:
+	// tidak ada likuiditas di sana yang bisa disapu.
+	//
+	// Bila FVG termuda tidak dijangkau harga, acuan diperiksa pada FVG lebih tua
+	// DARI YANG TERMUDA ke belakang dan berhenti pada sweep sah pertama. Ini bukan
+	// "menyisir FVG usang": penelusuran berhenti di struktur terdekat yang benar-
+	// benar disapu pasar.
+	//
+	// Kasus nyata XAUUSD H4 12 Nov 2026: FVG bullish kecil 3886.93-3888.47
+	// (lahir 10:00) tidak pernah disentuh lagi, sementara FVG bearish besar
+	// 3887.64-3924.74 baru disapu candle 18:00 dan 22:00. Sweep bearish itu
+	// yang benar, dan itulah yang dipakai.
+	if !fvgMasihDijangkauHarga(latestFVG, candles) {
+		return e.cariSweepPadaFVGLebihTua(candles, fvgs, activeFVGs, latestFVG, idxTerakhir)
+	}
 
 	// Deteksi apakah terjadi Double / Stacked FVG (displacements berturut-turut pada arah yang sama).
 	// Pada kondisi Double FVG, Candle 3 dari FVG terbaru adalah batas/lantai FVG yang sah disapu
@@ -318,6 +410,51 @@ func (e *Evaluator) DetectHTFIlaSweep(candles []indicators.Candle) *HTFSweep {
 		FVG:       &latestFVG,
 		Details:   detailStr,
 	}
+}
+
+// cariSweepPadaFVGLebihTua menangani satu keadaan khusus: FVG aktif termuda
+// sudah tidak dijangkau harga, sehingga tidak mungkin jadi acuan sweep.
+//
+// Dalam keadaan itu acuan diperiksa pada FVG aktif yang lebih tua, DARI YANG
+// PALING MUDA ke belakang, dan berhenti pada FVG pertama yang sweep-nya sah.
+// Satu FVG lebih tua boleh jadi acuan hanya bila sweep-nya memang terjadi saat
+// atau setelah FVG itu lahir (Candle 3) dan masih dalam batas umur.
+//
+// Mengembalikan nil bila tak satu pun menghasilkan sweep sah. Sengaja tidak
+// mengembalikan "acuan arah" dari FVG tertua: itu yang dulu membuat evaluator
+// menelusuri candle sangat jauh ke belakang mencari sweep yang sudah usang.
+func (e *Evaluator) cariSweepPadaFVGLebihTua(
+	candles []indicators.Candle,
+	fvgs []FVG,
+	activeFVGs []FVG,
+	fvgTermuda FVG,
+	idxTerakhir int,
+) *HTFSweep {
+	for i := len(activeFVGs) - 1; i >= 0; i-- {
+		fvgLebihTua := activeFVGs[i]
+		if fvgLebihTua.Candle3Index >= fvgTermuda.Candle3Index {
+			continue // kandidat utama sendiri atau lebih baru
+		}
+		if idxTerakhir-fvgLebihTua.Candle3Index > umurMaksimalFVG {
+			continue // terlalu tua untuk dijadikan acuan
+		}
+
+		isDoubleFVG := false
+		if idx := indexOfFVG(fvgs, fvgLebihTua); idx > 0 {
+			prevFVG := fvgs[idx-1]
+			consecutive := fvgLebihTua.Candle1Index == prevFVG.Candle3Index ||
+				fvgLebihTua.Candle2Index-prevFVG.Candle2Index == 1
+			if prevFVG.Type == fvgLebihTua.Type && !prevFVG.Mitigated && consecutive {
+				isDoubleFVG = true
+			}
+		}
+
+		sweep := e.detectSweepPadaFVG(candles, fvgs, fvgLebihTua, isDoubleFVG)
+		if sweep != nil && sweep.Detected {
+			return sweep
+		}
+	}
+	return nil
 }
 
 // detectSweepPadaFVG menjalankan aturan sweep ILA 2.0 untuk SATU FVG acuan,
@@ -623,19 +760,13 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		if firstBear == nil {
-			for k := lowestIdx; k >= 0; k-- {
-				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
-					break
-				}
-				if candles[k].Close < candles[k].Open {
-					firstBear = &candles[k]
-					break
-				}
-			}
-		}
-
-		if firstBear == nil {
-			// Belum ada deretan candle bearish internal di dalam Candle 5
+			// Belum ada deretan candle bearish yang bersambung menuju ekstrem.
+			//
+			// Dulu ada blok cadangan di sini yang mengambil candle bearish PERTAMA
+			// yang ditemui saat menelusuri mundur. Blok itu keliru karena bisa
+			// meminjam candle dari Candle 4 lalu menjadikan candle ekstrem sendiri
+			// sebagai penembusnya, sehingga lahir CISD dari deretan yang tidak ada.
+			// Tanpa deretan, memang belum ada CISD.
 			return nil, false
 		}
 
@@ -719,19 +850,13 @@ func (e *Evaluator) DetectDynamicCISD(candles []indicators.Candle, direction str
 		}
 
 		if firstBull == nil {
-			for k := highestIdx; k >= 0; k-- {
-				if !sweepCandle.Timestamp.IsZero() && candles[k].Timestamp.Before(sweepCandle.Timestamp) {
-					break
-				}
-				if candles[k].Close > candles[k].Open {
-					firstBull = &candles[k]
-					break
-				}
-			}
-		}
-
-		if firstBull == nil {
-			// Belum ada deretan candle bullish internal di dalam Candle 5
+			// Belum ada deretan candle bullish yang bersambung menuju ekstrem.
+			//
+			// Dulu ada blok cadangan di sini yang mengambil candle bullish PERTAMA
+			// yang ditemui saat menelusuri mundur. Blok itu keliru karena bisa
+			// meminjam candle dari Candle 4 lalu menjadikan candle ekstrem sendiri
+			// sebagai penembusnya, sehingga lahir CISD dari deretan yang tidak ada.
+			// Tanpa deretan, memang belum ada CISD.
 			return nil, false
 		}
 

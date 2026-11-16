@@ -69,6 +69,62 @@ dan balas di bagian "⬆️ DARI HERMES KE HUMAN".
 
 ## ⬇️ DARI HUMAN KE HERMES
 
+### [2026-11-15] PERBAIKAN — ILA 2.0: acuan FVG termuda, batas umur, dan CISD wajib berderetan
+- **Pelaku:** Claude
+- **Tipe:** PERBAIKAN
+- **Status:** 🟢 SELESAI di branch `fix/ila-fvg-acuan-terminuda-dan-cisd-deretan` (belum di-merge ke `develop`, **belum di-deploy ke VPS 1**)
+- **Asal:** diselaraskan dengan `go-ila-platform` commit `86433bf` yang sudah berjalan di backtest produksi
+
+#### Latar belakang
+Laporan trader: hasil backtest terlalu agresif mengeksekusi **FVG jadul**, dan ada setup sell yang clean tetapi tidak terdeteksi sweep-nya. Setelah penelusuran, ada tiga sebab yang berdiri sendiri.
+
+| # | Gejala | Akar masalah |
+|---|---|---|
+| 1 | Entry muncul dari zona berhari-hari lalu | **Blok cadangan CISD** memungut candle berlawanan mana saja yang ditemui saat menyisir mundur, termasuk dari Candle 4, lalu memakai candle ekstrem sendiri sebagai penembusnya |
+| 2 | Acuan bukan struktur terakhir | `latestFVG := activeFVGs[len(activeFVGs)-1]` mengambil **elemen terakhir daftar**, bukan yang **candle pembentuknya paling akhir** |
+| 3 | FVG baru dianggap `Mitigated`/dijangkau secara keliru | Pemindaian jarak ikut menghitung **candle pembentuk FVG itu sendiri**, yang menurut definisi memang berada di dalam zonanya |
+
+**Kasus nyata yang mengunci tiap perbaikan:**
+- **USTEC 9 Okt 2026 21:00 NY** — entry SELL palsu dengan SL 8,7 poin. Terbukti lahir dari blok cadangan (#1).
+- **XAUUSD H4 12 Nov 2026** — FVG bearish besar `3887.64-3924.74` disapu candle 18:00 dan 22:00, sementara FVG bullish kecil `3886.93-3888.47` (lahir 10:00) tidak pernah disentuh lagi. Setup SELL ini **sah** dan harus tetap muncul (#2, #3).
+
+#### Perubahan (`pkg/ila/evaluator.go`)
+1. **Blok cadangan CISD dihapus** (sisi BEARISH `firstBear` dan BULLISH `firstBull`). Tanpa deretan candle berlawanan yang **bersambung** menuju titik ekstrem, memang belum ada CISD. `return nil, false`.
+2. **Acuan dipilih dari yang TERMUDA.**
+   - `latestFVG` diambil dengan membandingkan `Candle3Index`, bukan posisi di daftar.
+   - **Urutan disengaja: pilih dulu, baru uji syaratnya.** Versi sebelumnya menyaring dulu lalu memilih yang termuda di antara yang lolos, sehingga bila FVG termuda gagal syarat mesin diam-diam mundur ke FVG lebih tua.
+3. **`umurMaksimalFVG = 6`** — batas umur FVG dalam candle HTF sejak Candle 3. Diukur relatif, jadi berlaku sama untuk semua timeframe dan pasangan tanpa angka khusus per simbol. Angka enam hasil pengukuran pada feed asli: batas empat membuang entry sah EURUSD 12 Nov 2026 09:45 NY yang berakhir TP.
+4. **`fvgMasihDijangkauHarga`** — syarat harga masih menyentuh zona (bearish: `High >= Bottom - tol`; bullish: `Low <= Top + tol`), memakai `getFVGTolerance` yang sudah ada. Pemindaian dimulai dari **candle setelah Candle 3**, bukan dari Candle 3 itu sendiri.
+5. **`cariSweepPadaFVGLebihTua`** — satu keadaan khusus yang dijaga: bila FVG termuda **tidak** dijangkau harga, acuan diperiksa pada FVG lebih tua **dari yang termuda ke belakang** dan **berhenti pada sweep sah pertama**. Ini bukan menyisir FVG usang; inilah yang mempertahankan setup XAUUSD 12 Nov tanpa membuka pintu entry dari struktur lama.
+
+#### Kenapa aturan ini tidak bertabrakan dengan PR sebelumnya
+PR `d59e936` sudah mengizinkan penelusuran **maksimal dua FVG aktif** dan memilih **sweep terlama**. Perbaikan ini tidak menghapus aturan itu; yang berubah adalah **cara memilih acuan pertama** (termuda, bukan elemen terakhir) dan **adanya syarat umur serta jarak** sebelum acuan dipakai. Kasus 12 Nov tetap lolos lewat jalur yang sama.
+
+#### File Terdampak
+- `pkg/ila/evaluator.go` (`umurMaksimalFVG`, `fvgMasihDijangkauHarga`, `DetectHTFIlaSweep`, `cariSweepPadaFVGLebihTua`; hapus blok cadangan CISD)
+- `pkg/ila/fvg_acuan_test.go` (baru)
+- `pkg/ila/cisd_deretan_test.go` (baru)
+
+#### Verifikasi
+- **`go build ./...` bersih, `go test ./...` seluruh paket hijau.**
+- **Empat test baru, dan terbukti MERAH lebih dulu pada kode lama:**
+  - `TestCISDTidakTerbentukTanpaDeretan` — pada kode lama menghasilkan CISD palsu level `3005.00` dari candle sweep; sekarang `nil`. **Ini reproduksi langsung USTEC 9 Okt.**
+  - `TestFVGTermudaGagalTidakMundurKeFVGLebihTua` — versi lama masih melaporkan acuan arah dari FVG tertua walau tak satu pun disapu pasar.
+  - `TestFVGTerpilihYangTermuda` — mengunci pemilihan `Candle3Index`, bukan posisi daftar.
+  - `TestCISDTetapTerbentukDariDeretanSah` — pagar anti-regresi: deretan bearish yang sah tetap membentuk CISD dengan level `3000.00`.
+- **Test lama yang dipertahankan sebagai pagar aturan yang sudah disahkan trader:**
+  - `TestCISDOriginCanFormInPriorCandleRun` / `TestCISDOriginBullishCanFormInPriorCandleRun` — origin CISD **boleh** berawal di Candle 4 (dasar kasus 6 Nov dan 11 Nov).
+  - `TestFVGTerpilihYangTermuda` (varian XAUUSD 12 Nov) — setup SELL 12 Nov tetap sah.
+
+#### Catatan penting untuk Hermes
+- **Blok cadangan CISD dihapus permanen.** Jangan dikembalikan dengan alasan "menambah peluang entry": itulah sumber entry palsu USTEC 9 Okt, dan gejalanya berupa SL yang salah posisi, bukan sekadar entry yang meleset.
+- **Urutan pemilihan FVG jangan dibalik** (saring dulu → pilih termuda). Membalik urutannya mengembalikan perilaku "mundur ke FVG lebih tua" yang sedang dibereskan.
+- **`umurMaksimalFVG` bukan preferensi.** Mengubah angka 6 wajib disertai pengukuran ulang pada feed asli; batas 4 sudah terbukti membuang entry sah.
+- **`fvgMasihDijangkauHarga` memakai INDEKS candle**, jadi pemanggilnya wajib memberikan slice candle lengkap yang memuat Candle 1..3 pembentuk FVG. Memberi slice terpisah (hanya candle setelah FVG) membuat fungsi ini buta.
+- **Belum ada yang di-deploy.** Live VPS 1 masih memakai aturan lama sampai branch ini di-review dan di-merge.
+
+---
+
 ### [2026-11-15] PERBAIKAN — ILA 2.0: C2 Closure, ERL 3-candle, invalidasi IRL berbasis close
 - **Pelaku:** Claude
 - **Tipe:** PERBAIKAN
