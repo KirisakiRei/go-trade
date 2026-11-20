@@ -22,6 +22,7 @@ monitor_state*.json
 
 # Rancangan arsitektur (draft, tidak di-track)
 plans/
+New ILA 2.0/
 
 # Sertifikat & secret
 *.crt

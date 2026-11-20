@@ -19,6 +19,7 @@ var ILA2Pairs = []Pair{
 	{HTF: "D1", LTF: "H1"},
 	{HTF: "H4", LTF: "M15"},
 	{HTF: "H1", LTF: "M5"},
+	{HTF: "M15", LTF: "M1"},
 }
 
 // ila2Evaluator membungkus service ILA 2.0.

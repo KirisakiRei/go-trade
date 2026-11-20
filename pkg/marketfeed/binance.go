@@ -49,6 +49,8 @@ func (p *BinanceProvider) mapTimeframe(tf string) string {
 		return "1d"
 	case "W", "W1", "1W", "1w":
 		return "1w"
+	case "MN", "MN1", "MONTHLY", "1MO":
+		return "1M"
 	default:
 		return ""
 	}
@@ -71,6 +73,17 @@ func (p *BinanceProvider) mapSymbol(symbol string) string {
 func (p *BinanceProvider) FetchCandles(ctx context.Context, symbol string, timeframe string, limit int) ([]indicators.Candle, error) {
 	if limit <= 0 {
 		limit = 200
+	}
+	if isQuarterlyTF(timeframe) {
+		fetchLimit := limit*3 + 2
+		if fetchLimit > 1000 {
+			fetchLimit = 1000
+		}
+		monthly, err := p.FetchCandles(ctx, symbol, "MN1", fetchLimit)
+		if err != nil {
+			return nil, err
+		}
+		return ValidateCandles(aggregateQuarterly(monthly, limit))
 	}
 	if limit > 1000 {
 		limit = 1000
@@ -147,4 +160,37 @@ func (p *BinanceProvider) FetchCandles(ctx context.Context, symbol string, timef
 	}
 
 	return ValidateCandles(candles)
+}
+
+// aggregateQuarterly menggabungkan candle bulanan (urut naik) menjadi candle
+// kuartal kalender (Jan-Mar, Apr-Jun, Jul-Sep, Okt-Des). Kuartal baru dianggap
+// closed bila bulan ketiganya (Mar/Jun/Sep/Des) hadir dan sudah closed.
+func aggregateQuarterly(monthly []indicators.Candle, limit int) []indicators.Candle {
+	var out []indicators.Candle
+	lastYear, lastQ := -1, -1
+	for _, c := range monthly {
+		u := c.Timestamp.UTC()
+		y, q := u.Year(), (int(u.Month())-1)/3
+		closed := c.IsClosed && u.Month()%3 == 0
+		if y != lastYear || q != lastQ {
+			c.IsClosed = closed
+			out = append(out, c)
+			lastYear, lastQ = y, q
+			continue
+		}
+		cur := &out[len(out)-1]
+		if c.High > cur.High {
+			cur.High = c.High
+		}
+		if c.Low < cur.Low {
+			cur.Low = c.Low
+		}
+		cur.Close = c.Close
+		cur.Volume += c.Volume
+		cur.IsClosed = closed
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
 }

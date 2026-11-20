@@ -160,6 +160,10 @@ func (p *TradingViewProvider) MapResolution(timeframe string) string {
 		return "1D"
 	case "1W", "W1", "W":
 		return "1W"
+	case "MN", "MN1", "MONTHLY", "1MO":
+		return "1M"
+	case "Q", "Q1", "QUARTERLY", "3MO":
+		return "3M"
 	default:
 		// Timeframe tak dikenal tidak boleh diam-diam memakai 15 menit:
 		// candle dengan resolusi berbeda membuat evaluasi salah tanpa jejak.
@@ -190,8 +194,42 @@ func ParseTimeframeDuration(timeframe string) time.Duration {
 		return 24 * time.Hour
 	case "1W", "W1", "W":
 		return 7 * 24 * time.Hour
+	case "MN", "MN1", "MONTHLY", "1MO":
+		return 30 * 24 * time.Hour
+	case "Q", "Q1", "QUARTERLY", "3MO":
+		return 90 * 24 * time.Hour
 	default:
 		return 15 * time.Minute
+	}
+}
+
+// isMonthlyTF / isQuarterlyTF mengenali timeframe kalender tanpa bentrok dengan "1M"/"3M" menit.
+func isMonthlyTF(timeframe string) bool {
+	switch strings.ToUpper(strings.TrimSpace(timeframe)) {
+	case "MN", "MN1", "MONTHLY", "1MO":
+		return true
+	}
+	return false
+}
+
+func isQuarterlyTF(timeframe string) bool {
+	switch strings.ToUpper(strings.TrimSpace(timeframe)) {
+	case "Q", "Q1", "QUARTERLY", "3MO":
+		return true
+	}
+	return false
+}
+
+// candleCloseTime menghitung waktu tutup candle; bulanan/kuartalan memakai kalender
+// agar panjang bulan (28-31 hari) tidak menggeser status IsClosed.
+func candleCloseTime(open time.Time, timeframe string) time.Time {
+	switch {
+	case isMonthlyTF(timeframe):
+		return open.AddDate(0, 1, 0)
+	case isQuarterlyTF(timeframe):
+		return open.AddDate(0, 3, 0)
+	default:
+		return open.Add(ParseTimeframeDuration(timeframe))
 	}
 }
 
@@ -329,9 +367,7 @@ func (p *TradingViewProvider) fetch(ctx context.Context, tvSymbol, timeframe str
 					}
 
 					candleTime := time.Unix(int64(tsSec), 0).UTC()
-					tfDuration := ParseTimeframeDuration(timeframe)
-					candleCloseTime := candleTime.Add(tfDuration)
-					isClosed := !now.Before(candleCloseTime)
+					isClosed := !now.Before(candleCloseTime(candleTime, timeframe))
 
 					candles = append(candles, indicators.Candle{
 						Timestamp: candleTime,
