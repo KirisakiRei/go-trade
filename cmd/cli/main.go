@@ -294,48 +294,48 @@ func main() {
 		return
 	}
 
-	fmt.Println("🎯 IMAGINARY LIQUIDITY (ILA) ANALYSIS")
+	fmt.Println("🎯 NEW ILA 2.0 ANALYSIS")
 	fmt.Println("==================================================")
+	fmt.Printf("• Time Cycle         : %s\n", setup.Cycle)
 	fmt.Printf("• Pasangan Timeframe : %s (HTF) ➡️ %s (LTF)\n", setup.HTF, setup.LTF)
 	fmt.Printf("• Simbol Instrumen   : %s\n", setup.Symbol)
 	fmt.Printf("• Bias Arah          : %s\n", setup.Bias)
 	fmt.Printf("• Status Evaluasi    : %s\n\n", setup.Status)
-
 	if setup.HTFSweep != nil && setup.HTFSweep.Detected {
-		fmt.Printf("🔍 HTF SWEEP INSIDE FVG (%s):\n", setup.HTF)
+		fmt.Printf("🔍 HTF KEY LEVEL & C2 CLOSURE (%s, %s):\n", setup.HTF, setup.HTFSweep.KeyLevelKind)
 		fmt.Printf("  └ %s\n", setup.HTFSweep.Details)
-		fmt.Printf("  └ Level Stop Loss : %.5f (Puncak Sweep)\n", setup.HTFSweep.StopLoss)
-		fmt.Printf("  └ Target DOL      : %.5f (Eksternal Liquidity / SSL)\n\n", setup.HTFSweep.TargetDOL)
+		fmt.Printf("  └ Ekstrem C2      : %.5f\n\n", setup.HTFSweep.StopLoss)
 	} else if setup.HTFSweep != nil {
 		fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
 		if setup.HTFSweep.FVG != nil {
-			fmt.Printf("  └ Area FVG Terakhir: %.2f - %.2f (%s)\n", setup.HTFSweep.FVG.Bottom, setup.HTFSweep.FVG.Top, setup.HTFSweep.FVG.Type)
+			fmt.Printf("  └ Area IRL (%s)   : %.5f - %.5f (%s)\n", setup.HTFSweep.FVG.Type, setup.HTFSweep.FVG.Bottom, setup.HTFSweep.FVG.Top, setup.HTFSweep.FVG.Status)
 		}
-		fmt.Printf("  └ Detail           : %s\n\n", setup.HTFSweep.Details)
+		if setup.HTFSweep.Swing != nil {
+			fmt.Printf("  └ Level ERL (%s)  : %.5f (%s)\n", setup.HTFSweep.Swing.Type, setup.HTFSweep.Swing.Level, setup.HTFSweep.Swing.Status)
+		}
+		fmt.Printf("  └ Detail          : %s\n\n", setup.HTFSweep.Details)
 	} else {
 		fmt.Printf("🔍 HTF STATUS (%s):\n", setup.HTF)
-		fmt.Printf("  └ Belum terdeteksi sweep wick di dalam FVG HTF.\n\n")
+		fmt.Printf("  └ Belum ada C2 closure aktif pada key level ERL/IRL HTF.\n\n")
 	}
-
 	if setup.CISD != nil && setup.CISD.Detected {
-		fmt.Printf("⚡ LTF CISD CONFIRMATION (%s):\n", setup.LTF)
+		fmt.Printf("⚡ LTF CISD CONFIRMATION (%s, %s):\n", setup.LTF, setup.CISD.Condition)
 		fmt.Printf("  └ %s\n", setup.CISD.Details)
-		fmt.Printf("  └ Waktu Tembus    : %s\n\n", setup.CISD.BreakTime.Format("2006-01-02 15:04"))
+		fmt.Printf("  └ Waktu Konfirmasi: %s\n\n", setup.CISD.BreakTime.Format("2006-01-02 15:04"))
 	} else if setup.CISD != nil && setup.CISD.CISDLevel > 0 {
 		fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-		fmt.Printf("  └ Level CISD Acuan: %.5f (Origin deretan opposing leg)\n", setup.CISD.CISDLevel)
-		fmt.Printf("  └ Level SL Terkini: %.5f (Low/High Candle 5)\n", setup.CISD.ExtremeSL)
+		fmt.Printf("  └ Level CISD      : %.5f (Open candle pertama rangkaian)\n", setup.CISD.CISDLevel)
+		fmt.Printf("  └ SL Rangkaian    : %.5f (Puncak/dasar sapuan ERL)\n", setup.CISD.ExtremeSL)
 		fmt.Printf("  └ Status          : %s\n\n", setup.CISD.Details)
 	} else {
 		fmt.Printf("⚡ LTF STATUS (%s):\n", setup.LTF)
-		fmt.Printf("  └ Menunggu konfirmasi CISD (Body break Body).\n\n")
+		fmt.Printf("  └ Menunggu konfirmasi CISD pada key level ERL LTF selama C3 berjalan.\n\n")
 	}
-
 	if setup.Status == "READY_TO_ENTRY" {
-		fmt.Println("🚀 RENCANA EKSEKUSI (READY TO ENTRY):")
-		fmt.Printf("• Harga Entry : %.5f (Next candle open)\n", setup.EntryPrice)
-		fmt.Printf("• Stop Loss   : %.5f\n", setup.StopLoss)
-		fmt.Printf("• Take Profit : %.5f (DOL)\n", setup.TakeProfit)
+		fmt.Println("🚀 RENCANA POSISI (READY TO ENTRY):")
+		fmt.Printf("• Harga Entry : %.5f (Close candle konfirmasi CISD)\n", setup.EntryPrice)
+		fmt.Printf("• Stop Loss   : %.5f (Puncak/dasar rangkaian)\n", setup.StopLoss)
+		fmt.Printf("• Take Profit : %.5f (RR 1:2)\n", setup.TakeProfit)
 		fmt.Printf("• Rasio R:R   : 1:%.2f\n", setup.RiskReward)
 	}
 

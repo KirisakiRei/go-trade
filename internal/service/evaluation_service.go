@@ -102,25 +102,25 @@ func (s *evaluationService) EvaluateClosedTrade(ctx context.Context, pos *model.
 		switch {
 		case isTightSL:
 			rootCause = "ILA_SL_TERLALU_TIPIS"
-			technicalAnalysis = fmt.Sprintf("Jarak Stop Loss ILA (%.2f) berada di bawah batas struktural minimal. Retracement/wick normal menyapu level SL sebelum harga bergerak ke arah target DOL.", slDist)
-			actionableLesson = "Pastikan SL ILA diletakkan tepat di Low/High Candle 5 dan memenuhi floor minimal (Gold $4.50 / Forex 20 pips) agar tidak tersapu noise."
+			technicalAnalysis = fmt.Sprintf("Jarak Stop Loss New ILA 2.0 (%.2f) sangat sempit sehingga noise normal menyapu SL sebelum harga mencapai target RR 1:2.", slDist)
+			actionableLesson = "Pastikan SL tepat di swing puncak/dasar rangkaian saat menyapu ERL LTF."
 		case isRollover:
 			rootCause = "ILA_PELEBARAN_SPREAD_ROLLOVER"
-			technicalAnalysis = fmt.Sprintf("Posisi ILA aktif saat rollover subuh (open %02d:xx UTC, close %02d:xx UTC). Spread melebar tajam dan memicu SL sebelum target DOL tercapai.", openHour, closeHour)
-			actionableLesson = "Hindari menahan posisi ILA baru melewati jendela rollover 22:00-00:00 UTC untuk melindungi modal dari lonjakan spread."
+			technicalAnalysis = fmt.Sprintf("Posisi aktif saat rollover subuh (open %02d:xx UTC, close %02d:xx UTC). Spread melebar dan memicu SL sebelum target RR 1:2 tercapai.", openHour, closeHour)
+			actionableLesson = "Waspadai pelebaran spread di sekitar pergantian hari trading."
 		case durationMinutes <= 20:
 			rootCause = "ILA_LIQUIDITY_SWEEP_FALSE_BREAK"
-			technicalAnalysis = fmt.Sprintf("Harga berbalik cepat dalam %d menit setelah entry ILA, membentuk ekor jarum yang menembus titik invalidasi Candle 5.", durationMinutes)
-			actionableLesson = "Tunggu konfirmasi body-break-body CISD yang matang; hindari entry saat transisi candle LTF belum stabil."
+			technicalAnalysis = fmt.Sprintf("Harga berbalik cepat dalam %d menit setelah entry, menembus SL puncak/dasar rangkaian LTF.", durationMinutes)
+			actionableLesson = "Pastikan syarat key level ERL LTF (Kondisi 1/2/3) dan close body CISD terkonfirmasi jelas selama C3 berjalan."
 		default:
 			rootCause = "ILA_SWEEP_INVALIDATION"
-			technicalAnalysis = "Pergerakan harga menembus titik batas invalidasi (Low/High) Candle 5 sebelum mencapai target likuiditas DOL, mengindikasikan dorongan timeframe besar mendominasi."
-			actionableLesson = "Patuhi batas invalidasi Candle 5. Jika harga menembus High/Low Candle 5, setup batal secara objektif tanpa penyesalan."
+			technicalAnalysis = "Harga menembus batas invalidasi (SL puncak/dasar rangkaian LTF) sebelum mencapai target RR 1:2."
+			actionableLesson = "Patuhi SL objektif pada swing sapuan ERL; evaluasi ulang validitas C2 dan cycle."
 		}
 	} else {
 		rootCause = "EKSEKUSI_ILA_PRESISI"
-		technicalAnalysis = fmt.Sprintf("Setup ILA berhasil mencapai target profit penuh (+%.2f R). HTF Sweep di area FVG tertutup valid dan konfirmasi CISD body-break-body di LTF memberikan pemicu pengantaran harga yang sangat presisi tanpa noise.", pos.OutcomeR)
-		actionableLesson = "Pertahankan disiplin kaidah ILA: selalu tunggu HTF sweep candle closed resmi dan konfirmasi CISD body-break-body di candle 5 sebelum entry."
+		technicalAnalysis = fmt.Sprintf("Setup New ILA 2.0 mencapai target RR 1:2 (+%.2f R). C2 closure HTF dalam cycle dan konfirmasi CISD di LTF selama C3 berjalan memberikan eksekusi presisi.", pos.OutcomeR)
+		actionableLesson = "Pertahankan disiplin New ILA 2.0: C2 dan C3 dalam cycle, key level ERL LTF, entry di close konfirmasi CISD, target RR 1:2."
 	}
 
 	eval := &model.TradeEvaluation{

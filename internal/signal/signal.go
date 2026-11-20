@@ -65,6 +65,8 @@ const (
 // hidup terlalu lama lalu dieksekusi pada harga yang sudah jauh.
 func TTLUntuk(ltf string) time.Duration {
 	switch strings.ToUpper(strings.TrimSpace(ltf)) {
+	case "M1", "1M":
+		return time.Minute
 	case "M5", "5M":
 		return 5 * time.Minute
 	case "M15", "15M":

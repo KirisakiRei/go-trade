@@ -492,17 +492,7 @@ func (s *executionService) EvaluateAndExecuteILA(ctx context.Context, req dto.IL
 		return result, nil
 	}
 
-	// 4c. Structural SL floor (docs/04): tolak SL terlalu tipis.
-	if s.evalService != nil {
-		pf, pfErr := s.evalService.PreFlightCheck(ctx, req.Symbol, direction, "ILA_SWEEP_CISD", math.Abs(entryPrice-sl))
-		if pfErr == nil && pf != nil && !pf.CanExecute {
-			result.Executed = false
-			result.RejectionReason = pf.BlockingReason
-			return result, nil
-		}
-	}
-
-	// 5. Execute Order on cTrader Broker
+	// 5. Execute Order on cTrader Broker (aturan SL/TP murni mengikuti New ILA 2.0 tanpa floor tambahan)
 	orderRes, err := s.broker.ExecuteOrder(ctx, broker.OrderRequest{
 		Symbol:     req.Symbol,
 		Direction:  direction,
