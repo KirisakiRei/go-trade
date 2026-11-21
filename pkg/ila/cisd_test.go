@@ -67,11 +67,11 @@ func TestCISD_Kondisi3_FTMTanpaiFVG_WajibSWLFTM(t *testing.T) {
 	head := []C{{101, 102, 99.5, 100}, {100, 103, 99.8, 102}, {102, 102.5, 100.5, 101}, {101, 101.5, 99, 99.5}, {99.5, 100.5, 99.2, 100.3}}
 	ok := cisdSeries(append(append([]C{}, head...), C{100.3, 104, 100.2, 103.5}, C{103.5, 103.8, 98.5, 98.8})...)
 	bear, bull := detectBoth(t, ok)
-	if !bear.Detected || bear.Condition != CISDKondisi3 || bear.EntryPrice != 98.8 {
-		t.Fatalf("-CISD: %+v", bear)
+	if !bear.Detected || bear.Condition != CISDKondisi3 || bear.EntryPrice != 98.8 || bear.CISDLevel != 99.2 {
+		t.Fatalf("-CISD (level harus low candle pertama 99.2): %+v", bear)
 	}
-	if !bull.Detected || bull.Condition != CISDKondisi3 {
-		t.Fatalf("+CISD: %+v", bull)
+	if !bull.Detected || bull.Condition != CISDKondisi3 || bull.CISDLevel != 100.8 {
+		t.Fatalf("+CISD (level harus high candle pertama 100.8): %+v", bull)
 	}
 	// -CISD terjadi tetapi swing low (99) belum di-close body di bawahnya: belum terkonfirmasi.
 	no := cisdSeries(append(append([]C{}, head...), C{100.3, 104, 100.2, 103.5}, C{103.5, 103.8, 98.5, 99.2})...)
@@ -139,7 +139,39 @@ func TestCISD_Kondisi3_RetraceMinorSebelumSWLFTM(t *testing.T) {
 		C{99.6, 99.7, 98.4, 98.5},
 	)...)
 	bear, bull := detectBoth(t, cs)
-	if !bear.Detected || bear.Condition != CISDKondisi3 || bear.EntryPrice != 98.5 || !bull.Detected || bull.Condition != CISDKondisi3 {
+	if !bear.Detected || bear.Condition != CISDKondisi3 || bear.EntryPrice != 98.5 || bear.CISDLevel != 99.2 || !bull.Detected || bull.Condition != CISDKondisi3 || bull.CISDLevel != 100.8 {
 		t.Fatalf("Kondisi 3 setelah retrace minor harus terkonfirmasi: %+v | %+v", bear, bull)
+	}
+}
+
+func TestCISD_Kondisi3_WajibTembusLowCandlePertama(t *testing.T) {
+	// Satu rangkaian bullish utuh idx4..idx7 tanpa BISI:
+	// idx4: bullish #1 dengan open=99.5, low=98.4 (wick bawah lebih rendah dari open).
+	// idx6: tetap bullish tapi membentuk SWL terbaru di 100.0 (low 100.0 < low idx5=100.5 & idx7=100.3).
+	// idx7: FTM swing high 103 (close 103.5 > 103) tanpa BISI/iFVG.
+	// idx8: close 98.9 -> sudah < open (99.5) dan < SWL 100.0 (SWL FTM), tapi >= low idx4 (98.4) -> BELUM terkonfirmasi.
+	// idx9: close 98.2 -> < low idx4 (98.4) -> baru terkonfirmasi Kondisi 3 dengan CISDLevel = 98.4 (+CISD = 101.6).
+	base := []C{
+		{101, 102, 99.5, 100},      // idx0
+		{100, 103, 99.8, 102},      // idx1: Swing High 103
+		{102, 102.5, 100.5, 101},   // idx2
+		{101, 101.5, 99.3, 99.5},   // idx3
+		{99.5, 101.2, 98.4, 101},   // idx4: bullish #1 (open=99.5, low=98.4)
+		{101, 102.2, 100.5, 102},   // idx5: bullish
+		{102, 102.8, 100.0, 102.5}, // idx6: bullish, bentuk SWL terbaru 100.0
+		{102.5, 104, 100.3, 103.5}, // idx7: bullish, FTM swing high 103 tanpa BISI
+		{103.5, 103.6, 98.6, 98.9}, // idx8: close < open 99.5 & < SWL 100.0, tapi >= low 98.4
+	}
+	bearNotYet, bullNotYet := detectBoth(t, cisdSeries(base...))
+	if (bearNotYet != nil && bearNotYet.Detected) || (bullNotYet != nil && bullNotYet.Detected) {
+		t.Fatalf("close di atas low/di bawah high candle pertama tidak boleh konfirmasi Kondisi 3: %+v | %+v", bearNotYet, bullNotYet)
+	}
+	confirmed := append(base, C{98.9, 99.0, 98.0, 98.2}) // idx9: close 98.2 < 98.4
+	bear, bull := detectBoth(t, cisdSeries(confirmed...))
+	if !bear.Detected || bear.Condition != CISDKondisi3 || bear.CISDLevel != 98.4 || bear.EntryPrice != 98.2 {
+		t.Fatalf("-CISD Kondisi 3 harus terkonfirmasi setelah tembus low 98.4: %+v", bear)
+	}
+	if !bull.Detected || bull.Condition != CISDKondisi3 || bull.CISDLevel != 101.6 || bull.EntryPrice != 101.8 {
+		t.Fatalf("+CISD Kondisi 3 harus terkonfirmasi setelah tembus high 101.6: %+v", bull)
 	}
 }

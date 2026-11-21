@@ -7,16 +7,18 @@ package ila
 // menjadi bullish, swing low menjadi swing high, BISI menjadi SIBI.
 //
 // -CISD (bearish):
-//   rangkaian  = candle bullish berurutan; level CISD = open candle pertama.
+//   rangkaian  = candle bullish berurutan;
+//                level CISD = open candle pertama (Kondisi 1 & 2),
+//                             atau low candle pertama (Kondisi 3).
 //   puncak     = high tertinggi sejak awal rangkaian sampai candle break (Stop Loss).
 //   break      = candle pertama setelah rangkaian yang close < level CISD (close body).
 //   key level  = swing high LTF terbaru sebelum puncak (ERL):
-//     Kondisi 1: valid dan terkena wick puncak
-//     Kondisi 2: FTM + BISI terbaru di rangkaian sudah iFVG
-//     Kondisi 3: FTM + tanpa iFVG + swing low terbaru FTM setelah puncak
+//     Kondisi 1: valid dan terkena wick puncak (level = open)
+//     Kondisi 2: FTM + BISI terbaru di rangkaian sudah iFVG (level = open)
+//     Kondisi 3: FTM + tanpa iFVG + swing low terbaru FTM setelah puncak (level = low)
 //   konfirmasi = candle (break atau sesudahnya, di dalam C3, close masih < level)
 //                saat key level dan break sama-sama terpenuhi. Entry = close-nya.
-//   Struktur gugur bila sebelum konfirmasi ada high > puncak (SL tersentuh) atau close >= level.
+//   Struktur gugur bila sebelum konfirmasi ada high > puncak (SL tersentuh).
 
 import (
 	"fmt"
@@ -45,6 +47,7 @@ func DetectCISD(ltf []indicators.Candle, dir string, c3Start, c3End time.Time) *
 type cisdOutcome struct {
 	runStart, peak, breakIdx, confirm int
 	level                             float64
+	useExtreme                        bool
 	cond                              CISDCondition
 	key                               *SwingERL
 	pendingReason                     string
@@ -66,7 +69,9 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 		if !bullish(rs) || bullish(rs-1) {
 			continue
 		}
-		o := &cisdOutcome{runStart: rs, peak: rs, breakIdx: -1, confirm: -1, level: cs[rs].Open}
+		openLevel, lowLevel := cs[rs].Open, cs[rs].Low
+		o := &cisdOutcome{runStart: rs, peak: rs, breakIdx: -1, confirm: -1, level: openLevel}
+		breakLowIdx := -1
 		alive, inRun := true, true
 		for k := rs + 1; k <= last && alive; k++ {
 			c := cs[k]
@@ -80,33 +85,77 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 					}
 					o.peak = k
 				}
-				if c.Close >= o.level || c.Close >= c.Open {
+				if c.Close >= openLevel || c.Close >= c.Open {
 					continue
 				}
 				o.breakIdx = k
+				if c.Close < lowLevel {
+					breakLowIdx = k
+				}
 			} else {
 				// Sesudah break: SL tersentuh -> gugur. Retrace di atas level hanya menunda konfirmasi.
 				if c.High > cs[o.peak].High {
 					alive = false
 					break
 				}
-				if c.Close >= o.level || c.Close >= c.Open {
-					if !inC3(k) {
+				if breakLowIdx < 0 && c.Close < lowLevel && c.Close < c.Open {
+					breakLowIdx = k
+				}
+				if c.Close >= openLevel || c.Close >= c.Open {
+					if !c.Timestamp.Before(c3End) {
 						break
 					}
 					continue
 				}
 			}
-			if !inC3(k) {
+			cond, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, k)
+			o.key, o.pendingReason = key, reason
+			if cond == CISDKondisi1 || cond == CISDKondisi2 {
+				if !inC3(k) || !inC3(o.breakIdx) {
+					if k == o.breakIdx || !c.Timestamp.Before(c3End) {
+						if k == o.breakIdx {
+							alive = false // break di luar C3 tidak berlaku
+						}
+						break
+					}
+					continue
+				}
+				o.level, o.useExtreme, o.cond, o.confirm = openLevel, false, cond, k
+				break
+			}
+			if cond == CISDKondisi3 {
+				o.level, o.useExtreme = lowLevel, true
+				if c.Close >= lowLevel {
+					o.pendingReason = "tanpa iFVG, SWL FTM terpenuhi, menunggu close body menembus level CISD"
+					if !c.Timestamp.Before(c3End) {
+						break
+					}
+					continue
+				}
+				if !inC3(k) || !inC3(breakLowIdx) {
+					if k == breakLowIdx || !inC3(breakLowIdx) {
+						alive = false // break low di luar C3 tidak berlaku
+					}
+					break
+				}
+				o.cond, o.confirm = CISDKondisi3, k
+				break
+			}
+			if key != nil && reason == reasonWaitKondisi3 {
+				o.level, o.useExtreme = lowLevel, true
+				if breakLowIdx >= 0 && !inC3(breakLowIdx) {
+					alive = false
+					break
+				}
+			}
+			if !c.Timestamp.Before(c3End) {
 				if k == o.breakIdx {
-					alive = false // break di luar C3 tidak berlaku
+					alive = false
 				}
 				break
 			}
-			cond, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, k)
-			o.key, o.pendingReason = key, reason
-			if cond != "" {
-				o.cond, o.confirm = cond, k
+			if !inC3(k) && breakLowIdx >= 0 && k == breakLowIdx {
+				alive = false
 				break
 			}
 		}
@@ -117,7 +166,10 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 			continue
 		}
 		if alive && o.breakIdx < 0 && o.pendingReason == "" {
-			_, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, last)
+			cond, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, last)
+			if cond == CISDKondisi3 || (key != nil && reason == reasonWaitKondisi3) {
+				o.level, o.useExtreme = lowLevel, true
+			}
 			o.key, o.pendingReason = key, "menunggu close body menembus level CISD; "+reason
 		}
 		if alive {
@@ -129,6 +181,8 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 	}
 	return pending
 }
+
+const reasonWaitKondisi3 = "swing high FTM tanpa iFVG, menunggu SWL FTM"
 
 // bearishKeyCondition mengevaluasi syarat key level -CISD pada candle k (kausal: hanya cs[0..k]).
 func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCondition, *SwingERL, string) {
@@ -169,7 +223,7 @@ func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCon
 	if latestBISI != nil && latestBISI.Status == StatusValid {
 		return "", key, "swing high FTM, BISI terbaru di rangkaian belum iFVG"
 	}
-	return "", key, "swing high FTM tanpa iFVG, menunggu SWL FTM"
+	return "", key, reasonWaitKondisi3
 }
 
 func mirrorCandles(cs []indicators.Candle) []indicators.Candle {
@@ -203,17 +257,25 @@ func (o *cisdOutcome) toCISD(ltf []indicators.Candle, dir string) *CISD {
 		}
 		out.KeySwing = &k
 	}
+	levelLabel := "open"
+	if o.useExtreme {
+		if dir == DirBullish {
+			levelLabel = "high"
+		} else {
+			levelLabel = "low"
+		}
+	}
 	if o.confirm < 0 {
-		out.Details = fmt.Sprintf("%s belum terkonfirmasi: level CISD %s (open candle %s pertama %s), SL %s. %s",
-			name, formatILAVal(out.CISDLevel), runName, formatCandleDateTime(ltf[o.runStart].Timestamp),
+		out.Details = fmt.Sprintf("%s belum terkonfirmasi: level CISD %s (%s candle %s pertama %s), SL %s. %s",
+			name, formatILAVal(out.CISDLevel), levelLabel, runName, formatCandleDateTime(ltf[o.runStart].Timestamp),
 			formatILAVal(out.ExtremeSL), o.pendingReason)
 		return out
 	}
 	bc := ltf[o.confirm]
 	out.Detected, out.Condition = true, o.cond
 	out.BreakCandle, out.BreakTime, out.EntryPrice = bc, bc.Timestamp, bc.Close
-	out.Details = fmt.Sprintf("%s terkonfirmasi (%s): close %s menembus level CISD %s pada %s; key level %s %s; SL %s",
-		name, o.cond, formatILAVal(bc.Close), formatILAVal(out.CISDLevel), formatCandleDateTime(bc.Timestamp),
+	out.Details = fmt.Sprintf("%s terkonfirmasi (%s): close %s menembus level CISD (%s) %s pada %s; key level %s %s; SL %s",
+		name, o.cond, formatILAVal(bc.Close), levelLabel, formatILAVal(out.CISDLevel), formatCandleDateTime(bc.Timestamp),
 		keyName, formatILAVal(out.KeySwing.Level), formatILAVal(out.ExtremeSL))
 	return out
 }
