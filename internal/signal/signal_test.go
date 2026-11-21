@@ -20,13 +20,14 @@ func TestTTLPerTimeframe(t *testing.T) {
 		"H1":  time.Hour,
 		"M15": 15 * time.Minute,
 		"M5":  5 * time.Minute,
+		"M1":  time.Minute,
 	}
 	for ltf, want := range cases {
 		if got := TTLUntuk(ltf); got != want {
 			t.Errorf("TTLUntuk(%q) = %v, ingin %v", ltf, got, want)
 		}
 	}
-	if got := TTLUntuk("M1"); got != 15*time.Minute {
+	if got := TTLUntuk("X9"); got != 15*time.Minute {
 		t.Fatalf("LTF tak dikenal harus aman 15 menit, dapat %v", got)
 	}
 }

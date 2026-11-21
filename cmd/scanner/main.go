@@ -515,6 +515,7 @@ func main() {
 		{HTF: "D1", LTF: "H1", PairName: "D1 -> H1"},
 		{HTF: "H4", LTF: "M15", PairName: "H4 -> M15"},
 		{HTF: "H1", LTF: "M5", PairName: "H1 -> M5"},
+		{HTF: "M15", LTF: "M1", PairName: "M15 -> M1"},
 	}
 
 	for _, sym := range Pairs {
@@ -539,8 +540,8 @@ func main() {
 
 			prevILA := state.ILAPairs[ilaKey]
 
-			// Scenario A: ILA Auto-Execution (Focus on actionable intraday/swing pairs)
-			if (ep.HTF == "H4" || ep.HTF == "D1") && setup.Status == "READY_TO_ENTRY" && setup.PassedMinRR && setup.HTFSweep != nil && !setup.HTFSweep.SweepInProgress && setup.CISD != nil && setup.CISD.Detected {
+			// Scenario A: New ILA 2.0 Auto-Execution (semua cycle aktif bersamaan)
+			if setup.Status == "READY_TO_ENTRY" && setup.PassedMinRR && setup.HTFSweep != nil && !setup.HTFSweep.SweepInProgress && setup.CISD != nil && setup.CISD.Detected {
 				breakTimeStr := setup.CISD.BreakTime.Format(time.RFC3339)
 				if prevILA.LastBreakTime != breakTimeStr || prevILA.LastStatus != "ENTRY" {
 					dir := "BUY"

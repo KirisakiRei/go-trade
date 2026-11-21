@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"ila-engine/internal/dto"
@@ -23,21 +22,12 @@ func NewILA2Service(feed marketfeed.Provider) ILA2Service {
 	}
 }
 
-// MapDefaultPairs returns default LTF for a given HTF per Section ILA rules.
-// Weekly -> H4, Daily -> H1, H4 -> M15, H1 -> M5.
+// MapDefaultLTF returns default LTF for a given HTF per New ILA 2.0 time-cycle table.
 func (s *ilaService) MapDefaultLTF(htf string) string {
-	switch strings.ToUpper(strings.TrimSpace(htf)) {
-	case "W", "1W", "WEEKLY":
-		return "H4"
-	case "D", "1D", "DAILY":
-		return "H1"
-	case "H4", "4H", "240M":
-		return "M15"
-	case "H1", "1H", "60M":
-		return "M5"
-	default:
-		return "M15"
+	if c, ok := ila.CycleForHTF(htf); ok {
+		return ila.CycleSpec[c][1]
 	}
+	return "M15"
 }
 
 func (s *ilaService) AnalyzeILA2(ctx context.Context, req dto.ILA2AnalysisRequest) (*ila.ILASetup, error) {
@@ -91,6 +81,7 @@ func (s *ilaService) AnalyzeAllPairs(ctx context.Context, symbol string) (*ila.I
 		{"D1 ➡️ H1", "D1", "H1"},
 		{"H4 ➡️ M15", "H4", "M15"},
 		{"H1 ➡️ M5", "H1", "M5"},
+		{"M15 ➡️ M1", "M15", "M1"},
 	}
 
 	resp := &ila.ILAMultiResponse{
@@ -131,7 +122,7 @@ func (s *ilaService) AnalyzeAllPairs(ctx context.Context, symbol string) (*ila.I
 	if activeCount > 0 {
 		resp.Summary = fmt.Sprintf("Ditemukan %d setup ILA siap eksekusi (READY TO ENTRY)!", activeCount)
 	} else {
-		resp.Summary = "Semua 4 pasangan timeframe dalam status pemantauan (WAIT)."
+		resp.Summary = fmt.Sprintf("Semua %d pasangan timeframe dalam status pemantauan (WAIT).", len(pairs))
 	}
 
 	return resp, nil

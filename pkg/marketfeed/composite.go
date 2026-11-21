@@ -92,7 +92,10 @@ func (p *MultiFeedProvider) FetchCandles(ctx context.Context, symbol string, tim
 	sym := normalizeSymbol(symbol)
 
 	minExpected := 50
-	if limit > 0 && limit < 50 {
+	if isMonthlyTF(timeframe) || isQuarterlyTF(timeframe) {
+		minExpected = 10
+	}
+	if limit > 0 && limit < minExpected {
 		minExpected = limit
 	}
 

@@ -70,10 +70,10 @@ func htfSweepToProto(h *ila.HTFSweep) *enginev1.HTFSweepInfo {
 	}
 	if h.FVG != nil {
 		info.Fvg = &enginev1.FairValueGap{
-			Type:      string(h.FVG.Type),
-			Top:       h.FVG.Top,
-			Bottom:    h.FVG.Bottom,
-			Mitigated: h.FVG.Mitigated,
+			Type:   string(h.FVG.Type),
+			Top:    h.FVG.Top,
+			Bottom: h.FVG.Bottom,
+			// Mitigated dihapus dari aturan New ILA 2.0; field proto dibiarkan false demi kompatibilitas wire.
 		}
 		if !h.FVG.Candle3Time.IsZero() {
 			info.Fvg.Candle3Time = timestamppb.New(h.FVG.Candle3Time)

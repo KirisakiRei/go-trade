@@ -519,6 +519,8 @@ func init() {
 func latestCandleClose(tf string, t time.Time) time.Time {
 	t = t.UTC()
 	switch tf {
+	case "M1", "1m", "1M":
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
 	case "M5", "5m":
 		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), (t.Minute()/5)*5, 0, 0, time.UTC)
 	case "M15", "15m":
