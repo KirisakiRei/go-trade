@@ -66,6 +66,9 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 
 	var best, pending *cisdOutcome
 	for rs := 1; rs <= last; rs++ {
+		if !cs[rs].Timestamp.Before(c3End) {
+			break
+		}
 		if !bullish(rs) || bullish(rs-1) {
 			continue
 		}
@@ -109,6 +112,12 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 					}
 					continue
 				}
+			}
+			// Puncak sapuan & break awal wajib berada di dalam C3; bila di luar C3,
+			// rangkaian ini tidak pernah bisa terkonfirmasi (hindari evaluasi key level historis).
+			if !inC3(o.peak) || !inC3(o.breakIdx) {
+				alive = false
+				break
 			}
 			cond, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, k)
 			o.key, o.pendingReason = key, reason
@@ -167,14 +176,14 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 			}
 			continue
 		}
-		if alive && o.breakIdx < 0 && o.pendingReason == "" {
+		if alive && o.breakIdx < 0 && o.pendingReason == "" && inC3(o.peak) {
 			cond, key, reason := bearishKeyCondition(cs, o.runStart, o.peak, last)
 			if cond == CISDKondisi3 || (key != nil && reason == reasonWaitKondisi3) {
 				o.level, o.useExtreme = lowLevel, true
 			}
 			o.key, o.pendingReason = key, "menunggu close body menembus level CISD; "+reason
 		}
-		if alive {
+		if alive && inC3(o.peak) {
 			pending = o
 		}
 	}
