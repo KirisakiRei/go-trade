@@ -192,7 +192,12 @@ func evalCand(c htfCand, htf, ltf []indicators.Candle, cycle TimeCycle, htfK, lt
 	detected := cisd != nil && cisd.Detected
 	if c2+1 == n-1 && !c3.IsClosed { // C3 sedang berjalan
 		if detected {
-			o.rank, o.status = rankLiveReady, StatusReady
+			if isLatestClosedBar(cisd.BreakTime, ltf) {
+				o.rank, o.status = rankLiveReady, StatusReady
+			} else {
+				// Setup sudah terkonfirmasi pada candle LTF sebelumnya di C3; dibiarkan berjalan, tidak diterbitkan ulang.
+				o.rank, o.status, o.note = rankC3Closed, StatusWaitC2, "Setup di C3 sudah terkonfirmasi sebelumnya; tidak diterbitkan ulang."
+			}
 		} else {
 			o.rank, o.status = rankLiveWaiting, StatusWaitCISD
 		}
@@ -214,16 +219,20 @@ func evalCand(c htfCand, htf, ltf []indicators.Candle, cycle TimeCycle, htfK, lt
 	return o
 }
 
-func isClosingBarOfC3(breakTime time.Time, ltf []indicators.Candle, ltfK string, c3End time.Time) bool {
-	if candleEnd(breakTime, ltfK).Before(c3End) {
-		return false
-	}
+func isLatestClosedBar(breakTime time.Time, ltf []indicators.Candle) bool {
 	for i := len(ltf) - 1; i >= 0; i-- {
 		if ltf[i].IsClosed {
 			return ltf[i].Timestamp.Equal(breakTime)
 		}
 	}
 	return false
+}
+
+func isClosingBarOfC3(breakTime time.Time, ltf []indicators.Candle, ltfK string, c3End time.Time) bool {
+	if candleEnd(breakTime, ltfK).Before(c3End) {
+		return false
+	}
+	return isLatestClosedBar(breakTime, ltf)
 }
 
 func validPlan(c *CISD, dir string) bool {

@@ -175,3 +175,48 @@ func TestCISD_Kondisi3_WajibTembusLowCandlePertama(t *testing.T) {
 		t.Fatalf("+CISD Kondisi 3 harus terkonfirmasi setelah tembus high 101.6: %+v", bull)
 	}
 }
+
+func TestCISD_PuncakDiLuarC3TidakBerlaku(t *testing.T) {
+	// Rangkaian & puncak sapuan (idx5, 10:45) terjadi SEBELUM c3Start (idx6, 11:00),
+	// lalu candle break (idx6) jatuh di dalam C3: tidak boleh terkonfirmasi.
+	cs := cisdSeries(with(C{100.3, 103.5, 100, 102.8}, C{102.8, 103, 99, 99.2})...)
+	c3StartAtBreak := cs[6].Timestamp
+	if c := DetectCISD(cs, DirBearish, c3StartAtBreak, c3StartAtBreak.Add(4*time.Hour)); c != nil && c.Detected {
+		t.Fatalf("puncak sapuan yang lahir sebelum C3 tidak boleh terkonfirmasi: %+v", c)
+	}
+}
+
+func TestCISD_RangkaianLamaGugurSaatRangkaianBaruMuncul(t *testing.T) {
+	// Reproduksi kasus XAUUSD: rangkaian lama (idx4-5) FTM swing high 103 (peak 104),
+	// lalu turun (idx6 bearish tanpa tembus open 99.5), muncul rangkaian bullish baru (idx7, puncak 102 < 104),
+	// lalu idx8 bearish tembus low 99.2 & SWL 99.0.
+	// Rangkaian lama tidak boleh hidup kembali sebagai zombie memakai swing lama 103
+	// saat rangkaian baru idx7 sendiri belum menyentuh swing high terbaru 104.
+	cs := cisdSeries(with(
+		C{100.3, 104.0, 100.2, 103.5}, // idx5: peak 104 (FTM swing 103), jadi swing high terbaru 104
+		C{103.5, 103.6, 100.0, 100.2}, // idx6: bearish tapi belum tembus open 99.5
+		C{100.2, 102.0, 100.1, 101.5}, // idx7: rangkaian bullish BARU (tidak sentuh swing high 104)
+		C{101.5, 101.6, 98.5, 98.8},   // idx8: bearish tembus low 99.2 & SWL 99.0
+	)...)
+	bear, bull := detectBoth(t, cs)
+	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
+		t.Fatalf("rangkaian zombie tidak boleh terkonfirmasi saat rangkaian baru belum sentuh swing terbaru: %+v | %+v", bear, bull)
+	}
+}
+
+func TestCISD_Kondisi3_SwingHighBaruSetelahPuncakMenggugurkan(t *testing.T) {
+	// Setelah break open (idx6), harga memantul dan membentuk swing high baru (idx8) sebelum SWL FTM (idx10):
+	// key level swing high lama sudah digantikan, jadi tidak boleh konfirmasi Kondisi 3.
+	cs := cisdSeries(with(
+		C{100.3, 104.0, 100.2, 103.5}, // idx5: peak 104 (FTM swing 103)
+		C{103.5, 103.6, 99.1, 99.3},   // idx6: break open 99.5, belum SWL FTM (< 99.0)
+		C{99.3, 100.0, 99.2, 99.8},    // idx7: kiri swing baru
+		C{99.8, 101.5, 99.7, 101.0},   // idx8: tengah swing high BARU (101.5, MidIndex > peak)
+		C{101.0, 101.1, 99.2, 99.4},   // idx9: kanan swing high baru (terkonfirmasi!)
+		C{99.4, 99.5, 98.4, 98.6},     // idx10: tembus low 99.2 & SWL 99.0
+	)...)
+	bear, bull := detectBoth(t, cs)
+	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
+		t.Fatalf("swing high baru setelah puncak harus menggugurkan key level lama: %+v | %+v", bear, bull)
+	}
+}

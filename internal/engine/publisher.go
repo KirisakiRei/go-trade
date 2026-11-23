@@ -69,6 +69,8 @@ type slotState struct {
 	feed            string
 	lastStatus      signal.Status
 	lastEvaluatedAt time.Time
+	lastReadyBreak  time.Time
+	lastReadyDir    string
 }
 
 // NewPublisher merangkai evaluator dengan registry pelanggan.
@@ -328,6 +330,16 @@ func (p *Publisher) evaluateSlot(ctx context.Context, symbol string, pair Pair, 
 			"symbol", symbol, "ltf", pair.LTF)
 		p.mu.Unlock()
 		return
+	}
+
+	// Cegah penerbitan ulang untuk candle konfirmasi CISD yang sama persis.
+	if res.CISD != nil && !res.CISD.BreakTime.IsZero() {
+		if st.lastReadyBreak.Equal(res.CISD.BreakTime) && st.lastReadyDir == res.Direction {
+			p.mu.Unlock()
+			return
+		}
+		st.lastReadyBreak = res.CISD.BreakTime
+		st.lastReadyDir = res.Direction
 	}
 
 	sig := signal.Signal{

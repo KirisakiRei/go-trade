@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ila-engine/internal/signal"
+	"ila-engine/pkg/ila"
 )
 
 // fakeEvaluator mengembalikan hasil yang bisa diatur per pengujian.
@@ -384,5 +385,19 @@ func TestJadwalLilinCloseDriven(t *testing.T) {
 	pub.Scan(context.Background())
 	if count != 2 {
 		t.Fatalf("saat candle H4 tutup evaluasi harus jalan, got count=%d", count)
+	}
+}
+
+func TestScanTidakMenerbitkanUlangCISDBreakYangSama(t *testing.T) {
+	r := readyResult()
+	r.Direction = "SELL"
+	r.CISD = &ila.CISD{Detected: true, BreakTime: jamBuka.Add(-15 * time.Minute)}
+	pub, _, got := setup(t, map[string]*Result{"H4|M15": r}, jamBuka)
+
+	pub.Scan(context.Background())
+	pub.Scan(context.Background())
+
+	if len(*got) != 1 {
+		t.Fatalf("CISD BreakTime yang sama tidak boleh diterbitkan ulang, terkirim = %d", len(*got))
 	}
 }

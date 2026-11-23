@@ -133,3 +133,22 @@ func TestEvaluate_CandlePenutupC3TetapReadyLaluBerhentiDiC4(t *testing.T) {
 		t.Fatalf("sesudah C3 lewat tidak boleh terbit READY ulang: %s", s2.Status)
 	}
 }
+
+func TestEvaluate_C3Berjalan_SetupStaleTidakTerbitUlang(t *testing.T) {
+	// CISD terkonfirmasi pada candle M15 idx6 di tengah C3 (running).
+	// Begitu candle M15 berikutnya (idx7) selesai tutup (bahkan bila harga sudah berbalik jauh),
+	// EvaluateILA tidak boleh menerbitkan StatusReady ulang untuk break lama idx6.
+	base := with(C{100.3, 103.5, 100, 102.8}, C{102.8, 103, 99, 99.2})
+	fresh := NewEvaluator().EvaluateILA(htfH4(true, htfSwingHighC2...), ltfCISD(base...), "H4", "M15", "XAUUSD")
+	if fresh.Status != StatusReady {
+		t.Fatalf("pada candle break terbaru harus READY, got %s", fresh.Status)
+	}
+	stale := NewEvaluator().EvaluateILA(
+		htfH4(true, htfSwingHighC2...),
+		ltfCISD(append(base, C{99.2, 104.2, 99.0, 103.9})...), // candle sesudahnya bahkan sudah tembus SL 103.5
+		"H4", "M15", "XAUUSD",
+	)
+	if stale.Status == StatusReady {
+		t.Fatalf("setup stale di C3 tidak boleh diterbitkan ulang sebagai READY: %s | %s", stale.Status, stale.Summary)
+	}
+}
