@@ -220,3 +220,22 @@ func TestCISD_Kondisi3_SwingHighBaruSetelahPuncakMenggugurkan(t *testing.T) {
 		t.Fatalf("swing high baru setelah puncak harus menggugurkan key level lama: %+v | %+v", bear, bull)
 	}
 }
+
+func TestCISD_SwingHighBaruDiPeakMinSatuMenggugurkan(t *testing.T) {
+	// Swing high lama (idx1, 103) di-FTM idx3, lalu idx4 (bearish outside bar, high 104.2) menjadi tengah
+	// swing high baru yang terkonfirmasi tepat pada idx5 (bullish runStart=peak=5, high 101.5 < 103).
+	// Key level lama 103 sudah digantikan swing high 104.2 (MidIndex = peak-1) dan peak tidak menyentuh 103.
+	cs := cisdSeries(
+		C{101, 102, 99.5, 100},        // idx0
+		C{100, 103, 99.8, 102},        // idx1: Swing High lama 103
+		C{102, 102.5, 99.0, 99.5},     // idx2: Swing Low 99.0
+		C{99.5, 104.0, 99.4, 103.5},   // idx3: FTM swing high 103
+		C{103.5, 104.2, 100.0, 100.2}, // idx4: bearish outside bar -> tengah swing high baru 104.2
+		C{100.2, 101.5, 100.1, 101.2}, // idx5: kanan swing 104.2 sekaligus bullish run (peak=5, high 101.5 < 103)
+		C{101.2, 101.3, 98.4, 98.6},   // idx6: bearish tembus low 100.1 & SWL 99.0
+	)
+	bear, bull := detectBoth(t, cs)
+	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
+		t.Fatalf("swing high lama yang sudah digantikan di peak-1 tidak boleh dipakai: %+v | %+v", bear, bull)
+	}
+}

@@ -212,17 +212,17 @@ func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCon
 		}
 	}
 	upToK := cs[:k+1]
-	// Jika sesudah puncak sapuan terbentuk swing high baru (bukan puncak itu sendiri),
-	// key level lama sudah digantikan (key-level-erl.md §4 & cisd.md) sehingga tidak boleh dipakai.
+	// Jika terbentuk swing high baru selain puncak sapuan itu sendiri (baik tepat di peak-1
+	// maupun sesudah puncak), key level lama sudah digantikan (key-level-erl.md §4 & cisd.md).
 	allERL := FindERL(upToK)
-	if latestSH := LatestERL(allERL, ERLSwingHigh); latestSH != nil && latestSH.MidIndex > peak {
-		return "", nil, "swing high acuan sudah digantikan swing high baru setelah puncak"
+	if latestSH := LatestERL(allERL, ERLSwingHigh); latestSH != nil && latestSH.MidIndex != key.MidIndex && latestSH.MidIndex != peak {
+		return "", nil, "swing high acuan sudah digantikan swing high baru"
+	}
+	if cs[peak].High < key.Level {
+		return "", key, fmt.Sprintf("puncak sapuan %s belum menyentuh swing high %s", formatILAVal(cs[peak].High), formatILAVal(key.Level))
 	}
 	if !ftm {
-		if cs[peak].High >= key.Level {
-			return CISDKondisi1, key, ""
-		}
-		return "", key, fmt.Sprintf("swing high %s valid tapi belum terkena wick", formatILAVal(key.Level))
+		return CISDKondisi1, key, ""
 	}
 	var latestBISI *FVG
 	for _, f := range FindIRL(upToK) {

@@ -24,7 +24,7 @@ services:
     env_file: ../.env
     environment:
       ENGINE_STRATEGY: ila-2.0
-      ENGINE_VERSION: "2.0.0"
+      ENGINE_VERSION: "2.1.1"
 
       # Port sengaja 9443, bukan default 9090. Penerima log platform memakai
       # 9090; dua hal berbeda dengan nomor sama mudah tertukar saat menelusuri
