@@ -540,20 +540,30 @@ func latestCandleClose(tf string, t time.Time) time.Time {
 	case "H1", "1H", "1h":
 		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
 	case "H4", "4H", "4h":
+		// Forex tutup di 17/21/01/05/09/13 NY, sedangkan Gold/Index di 18/22/02/06/10/14 NY.
+		// Ambil penutupan terbaru dari kedua jangkar agar tidak telat 3 jam di XAUUSD/USTEC.
 		tInNY := t.In(nyLocation)
 		nyHour := tInNY.Hour()
-		closeHour := nyHour - ((nyHour - 1 + 24) % 4)
+		closeFX := nyHour - ((nyHour - 1 + 24) % 4)
+		closeMetal := nyHour - ((nyHour - 2 + 24) % 4)
+		closeHour := closeFX
+		if closeMetal > closeHour {
+			closeHour = closeMetal
+		}
 		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), closeHour, 0, 0, 0, nyLocation)
 		return tCloseNY.UTC()
 	case "D", "D1", "1D", "1d":
+		// Forex tutup 17:00 NY, Gold/Index (dan cycle New ILA 2.0) tutup 18:00 NY.
 		tInNY := t.In(nyLocation)
-		closeDay := tInNY.Day()
-		if tInNY.Hour() < 17 {
-			tInNY = tInNY.AddDate(0, 0, -1)
-			closeDay = tInNY.Day()
+		switch {
+		case tInNY.Hour() >= 18:
+			return time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), 18, 0, 0, 0, nyLocation).UTC()
+		case tInNY.Hour() >= 17:
+			return time.Date(tInNY.Year(), tInNY.Month(), tInNY.Day(), 17, 0, 0, 0, nyLocation).UTC()
+		default:
+			prev := tInNY.AddDate(0, 0, -1)
+			return time.Date(prev.Year(), prev.Month(), prev.Day(), 18, 0, 0, 0, nyLocation).UTC()
 		}
-		tCloseNY := time.Date(tInNY.Year(), tInNY.Month(), closeDay, 17, 0, 0, 0, nyLocation)
-		return tCloseNY.UTC()
 	case "W", "W1", "1W", "1w":
 		days := (int(t.Weekday()) + 6) % 7
 		return time.Date(t.Year(), t.Month(), t.Day()-days, 0, 0, 0, 0, time.UTC)

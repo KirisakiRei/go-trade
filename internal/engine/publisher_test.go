@@ -379,12 +379,27 @@ func TestJadwalLilinCloseDriven(t *testing.T) {
 		t.Fatalf("sebelum candle H4 tutup evaluasi harus dilewati, got count=%d", count)
 	}
 
-	// Scan 3: Saat candle H4 tutup (14:00:04 UTC / 09:00 NY) -> evaluasi jalan
+	// Scan 3: Saat candle H4 tutup (14:00:04 UTC / 09:00 NY, jadwal Forex) -> evaluasi jalan
 	jamH4Tutup := time.Date(2026, 11, 2, 14, 0, 4, 0, time.UTC)
 	pub.WithClock(func() time.Time { return jamH4Tutup })
 	pub.Scan(context.Background())
 	if count != 2 {
-		t.Fatalf("saat candle H4 tutup evaluasi harus jalan, got count=%d", count)
+		t.Fatalf("saat candle H4 Forex tutup evaluasi harus jalan, got count=%d", count)
+	}
+
+	// Scan 4: Saat candle H4 Gold/Index tutup (15:00:04 UTC / 10:00 NY) -> evaluasi jalan
+	jamH4GoldTutup := time.Date(2026, 11, 2, 15, 0, 4, 0, time.UTC)
+	pub.WithClock(func() time.Time { return jamH4GoldTutup })
+	pub.Scan(context.Background())
+	if count != 3 {
+		t.Fatalf("saat candle H4 Gold/Index tutup evaluasi harus jalan, got count=%d", count)
+	}
+
+	// Scan 5: 1 jam kemudian (16:00:04 UTC / 11:00 NY), bukan jadwal tutup H4 -> lewati
+	pub.WithClock(func() time.Time { return jamH4GoldTutup.Add(time.Hour) })
+	pub.Scan(context.Background())
+	if count != 3 {
+		t.Fatalf("di luar jadwal tutup H4 evaluasi harus dilewati, got count=%d", count)
 	}
 }
 
