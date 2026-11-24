@@ -186,38 +186,48 @@ func TestCISD_PuncakDiLuarC3TidakBerlaku(t *testing.T) {
 	}
 }
 
-func TestCISD_RangkaianLamaGugurSaatRangkaianBaruMuncul(t *testing.T) {
-	// Reproduksi kasus XAUUSD: rangkaian lama (idx4-5) FTM swing high 103 (peak 104),
-	// lalu turun (idx6 bearish tanpa tembus open 99.5), muncul rangkaian bullish baru (idx7, puncak 102 < 104),
-	// lalu idx8 bearish tembus low 99.2 & SWL 99.0.
-	// Rangkaian lama tidak boleh hidup kembali sebagai zombie memakai swing lama 103
-	// saat rangkaian baru idx7 sendiri belum menyentuh swing high terbaru 104.
-	cs := cisdSeries(with(
-		C{100.3, 104.0, 100.2, 103.5}, // idx5: peak 104 (FTM swing 103), jadi swing high terbaru 104
-		C{103.5, 103.6, 100.0, 100.2}, // idx6: bearish tapi belum tembus open 99.5
-		C{100.2, 102.0, 100.1, 101.5}, // idx7: rangkaian bullish BARU (tidak sentuh swing high 104)
-		C{101.5, 101.6, 98.5, 98.8},   // idx8: bearish tembus low 99.2 & SWL 99.0
-	)...)
+func TestCISD_Kondisi2_RetraceBullishMinorSebelumBreakTetapValid(t *testing.T) {
+	// Reproduksi kasus nyata XAUUSD D1->H1 (24 Nov 2026):
+	// Rangkaian bullish FTM swing high 103 + bentuk BISI, turun dan membentuk iFVG,
+	// lalu muncul 1 candle jeda bullish kecil di bawah SL (membentuk minor lower swing high),
+	// sebelum candle bearish berikutnya close menembus open candle pertama rangkaian -> wajib KONDISI_2!
+	cs := cisdSeries(
+		C{101, 102, 99.5, 100},        // idx0
+		C{100, 103, 99.8, 102},        // idx1: Swing High 103
+		C{102, 102.5, 100.5, 101},     // idx2
+		C{101, 101.5, 99.0, 99.5},     // idx3: c1 BISI (high 101.5)
+		C{99.5, 104.0, 99.4, 103.8},   // idx4: bullish #1 (open=99.5), FTM swing high 103, c2 BISI
+		C{103.8, 104.5, 102.5, 103.0}, // idx5: peak=104.5, c3 BISI (low 102.5 > 101.5)
+		C{103.0, 103.2, 100.5, 100.8}, // idx6: close 100.8 < 101.5 -> iFVG! (belum tembus open 99.5)
+		C{100.8, 101.0, 99.6, 99.7},   // idx7: bearish hampir tembus open 99.5
+		C{99.7, 101.8, 99.6, 100.1},   // idx8: jeda bullish kecil di bawah SL (juga minor lower swing high)
+		C{100.1, 100.2, 98.5, 98.8},   // idx9: bearish close 98.8 < open 99.5 -> KONDISI_2!
+	)
 	bear, bull := detectBoth(t, cs)
-	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
-		t.Fatalf("rangkaian zombie tidak boleh terkonfirmasi saat rangkaian baru belum sentuh swing terbaru: %+v | %+v", bear, bull)
+	if !bear.Detected || bear.Condition != CISDKondisi2 || bear.CISDLevel != 99.5 || bear.ExtremeSL != 104.5 || bear.EntryPrice != 98.8 {
+		t.Fatalf("-CISD Kondisi 2 setelah jeda bullish minor harus terkonfirmasi: %+v", bear)
+	}
+	if !bull.Detected || bull.Condition != CISDKondisi2 || bull.CISDLevel != 100.5 || bull.ExtremeSL != 95.5 || bull.EntryPrice != 101.2 {
+		t.Fatalf("+CISD Kondisi 2 setelah jeda bearish minor harus terkonfirmasi: %+v", bull)
 	}
 }
 
-func TestCISD_Kondisi3_SwingHighBaruSetelahPuncakMenggugurkan(t *testing.T) {
-	// Setelah break open (idx6), harga memantul dan membentuk swing high baru (idx8) sebelum SWL FTM (idx10):
-	// key level swing high lama sudah digantikan, jadi tidak boleh konfirmasi Kondisi 3.
-	cs := cisdSeries(with(
-		C{100.3, 104.0, 100.2, 103.5}, // idx5: peak 104 (FTM swing 103)
-		C{103.5, 103.6, 99.1, 99.3},   // idx6: break open 99.5, belum SWL FTM (< 99.0)
-		C{99.3, 100.0, 99.2, 99.8},    // idx7: kiri swing baru
-		C{99.8, 101.5, 99.7, 101.0},   // idx8: tengah swing high BARU (101.5, MidIndex > peak)
-		C{101.0, 101.1, 99.2, 99.4},   // idx9: kanan swing high baru (terkonfirmasi!)
-		C{99.4, 99.5, 98.4, 98.6},     // idx10: tembus low 99.2 & SWL 99.0
-	)...)
-	bear, bull := detectBoth(t, cs)
-	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
-		t.Fatalf("swing high baru setelah puncak harus menggugurkan key level lama: %+v | %+v", bear, bull)
+func TestCISD_RetraceMenembusPuncakMenggugurkanStrukturLama(t *testing.T) {
+	// Bila candle jeda bullish menembus puncak (SL) rangkaian lama sebelum break,
+	// struktur lama wajib gugur (SL invalidation).
+	cs := cisdSeries(
+		C{101, 102, 99.5, 100},
+		C{100, 103, 99.8, 102},
+		C{102, 102.5, 100.5, 101},
+		C{101, 101.5, 99.0, 99.5},
+		C{99.5, 103.5, 99.4, 102.8},   // idx4: peak=103.5 (sentuh swing 103)
+		C{102.8, 103.0, 100.0, 100.5}, // idx5: bearish tanpa tembus open 99.5
+		C{100.5, 104.2, 100.4, 103.8}, // idx6: bullish baru tembus peak 103.5 -> rangkaian idx4 gugur, open baru 100.5
+		C{103.8, 103.9, 99.8, 100.0},  // idx7: close 100.0 < open baru 100.5 (belum tembus open lama 99.5)
+	)
+	bear := DetectCISD(cs, DirBearish, cisdC3, cisdC3End)
+	if bear != nil && bear.Detected && bear.CISDLevel == 99.5 {
+		t.Fatalf("rangkaian lama yang puncak SL-nya sudah tertembus tidak boleh hidup lagi: %+v", bear)
 	}
 }
 
@@ -234,7 +244,10 @@ func TestCISD_SwingHighBaruDiPeakMinSatuMenggugurkan(t *testing.T) {
 		C{100.2, 101.5, 100.1, 101.2}, // idx5: kanan swing 104.2 sekaligus bullish run (peak=5, high 101.5 < 103)
 		C{101.2, 101.3, 98.4, 98.6},   // idx6: bearish tembus low 100.1 & SWL 99.0
 	)
-	bear, bull := detectBoth(t, cs)
+	// Uji mulai C3 di idx5 (idx3-idx4 terjadi sebelum C3), sehingga hanya rangkaian idx5 yang berada di dalam C3.
+	c3AtIdx5 := cs[5].Timestamp
+	bear := DetectCISD(cs, DirBearish, c3AtIdx5, c3AtIdx5.Add(4*time.Hour))
+	bull := DetectCISD(mirror200(cs), DirBullish, c3AtIdx5, c3AtIdx5.Add(4*time.Hour))
 	if (bear != nil && bear.Detected) || (bull != nil && bull.Detected) {
 		t.Fatalf("swing high lama yang sudah digantikan di peak-1 tidak boleh dipakai: %+v | %+v", bear, bull)
 	}

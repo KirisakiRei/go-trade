@@ -75,22 +75,32 @@ func detectBearishCISD(cs []indicators.Candle, c3Start, c3End time.Time) *cisdOu
 		openLevel, lowLevel := cs[rs].Open, cs[rs].Low
 		o := &cisdOutcome{runStart: rs, peak: rs, breakIdx: -1, confirm: -1, level: openLevel}
 		breakLowIdx := -1
-		alive, inRun := true, true
+		alive, inRun, retracing := true, true, false
 		for k := rs + 1; k <= last && alive; k++ {
 			c := cs[k]
 			if o.breakIdx < 0 {
 				inRun = inRun && bullish(k)
-				// Rangkaian bullish sudah terputus candle bearish sebelum menembus CISD,
-				// lalu muncul candle bullish baru: rangkaian lama selesai agar tidak menjadi
-				// "zombie" yang menimpa rangkaian & key level lebih baru.
 				if !inRun && bullish(k) {
-					alive = false
-					break
+					// Candle bullish jeda/retrace setelah penurunan mulai: rangkaian tetap
+					// hidup selama tidak menembus puncak (SL), sesuai draft cisd.md.
+					retracing = true
+					if !inC3(o.peak) {
+						alive = false
+						break
+					}
 				}
-				if c.High > cs[o.peak].High {
+				if retracing {
+					if c.High > cs[o.peak].High {
+						alive = false
+						break
+					}
+				} else if c.High > cs[o.peak].High {
 					o.peak = k
 				}
 				if c.Close >= openLevel || c.Close >= c.Open {
+					if !c.Timestamp.Before(c3End) {
+						break
+					}
 					continue
 				}
 				o.breakIdx = k
@@ -197,13 +207,13 @@ const reasonWaitKondisi3 = "swing high FTM tanpa iFVG, menunggu SWL FTM"
 
 // bearishKeyCondition mengevaluasi syarat key level -CISD pada candle k (kausal: hanya cs[0..k]).
 func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCondition, *SwingERL, string) {
-	// Swing high terbaru yang sudah terbentuk sebelum puncak (candle kanan < peak).
-	key := LatestERL(FindERL(cs[:peak]), ERLSwingHigh)
+	// Swing high terbaru yang sudah terbentuk sebelum puncak (MidIndex < peak, termasuk RightIndex == peak).
+	key := LatestERL(FindERL(cs[:peak+1]), ERLSwingHigh)
 	if key == nil {
 		return "", nil, "belum ada swing high LTF sebagai key level"
 	}
 	// Status key level dinilai sampai candle k; swing baru sesudah puncak sengaja tidak dihitung
-	// karena swing itu justru terbentuk oleh puncak sapuan.
+	// karena swing itu terbentuk oleh puncak sapuan atau retrace minor di bawah SL.
 	ftm := false
 	for j := key.RightIndex + 1; j <= k; j++ {
 		if cs[j].Close > key.Level {
@@ -211,19 +221,13 @@ func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCon
 			break
 		}
 	}
-	upToK := cs[:k+1]
-	// Jika terbentuk swing high baru selain puncak sapuan itu sendiri (baik tepat di peak-1
-	// maupun sesudah puncak), key level lama sudah digantikan (key-level-erl.md §4 & cisd.md).
-	allERL := FindERL(upToK)
-	if latestSH := LatestERL(allERL, ERLSwingHigh); latestSH != nil && latestSH.MidIndex != key.MidIndex && latestSH.MidIndex != peak {
-		return "", nil, "swing high acuan sudah digantikan swing high baru"
-	}
 	if cs[peak].High < key.Level {
 		return "", key, fmt.Sprintf("puncak sapuan %s belum menyentuh swing high %s", formatILAVal(cs[peak].High), formatILAVal(key.Level))
 	}
 	if !ftm {
 		return CISDKondisi1, key, ""
 	}
+	upToK := cs[:k+1]
 	var latestBISI *FVG
 	for _, f := range FindIRL(upToK) {
 		if f.Type == FVGBISI && f.Candle2Index >= runStart && f.Candle2Index <= peak {
@@ -234,7 +238,7 @@ func bearishKeyCondition(cs []indicators.Candle, runStart, peak, k int) (CISDCon
 	if latestBISI != nil && latestBISI.Status == StatusIFVG {
 		return CISDKondisi2, key, ""
 	}
-	if swl := LatestERL(allERL, ERLSwingLow); swl != nil && swl.Status == StatusFTM && swl.InvalidIndex > peak &&
+	if swl := LatestERL(FindERL(upToK), ERLSwingLow); swl != nil && swl.Status == StatusFTM && swl.InvalidIndex > peak &&
 		cs[swl.InvalidIndex].Close < cs[swl.InvalidIndex].Open {
 		return CISDKondisi3, key, ""
 	}
